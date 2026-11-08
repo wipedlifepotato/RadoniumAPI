@@ -123,6 +123,43 @@
             box-sizing: border-box;
         }
 
+        .result-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 8px;
+            font-size: 13px;
+            background: #fff;
+        }
+        .result-table th, .result-table td {
+            border: 1px solid #dcdde1;
+            padding: 5px 7px;
+            text-align: left;
+            vertical-align: top;
+        }
+        .result-table th {
+            background: #f5f6fa;
+            font-weight: 600;
+        }
+        .result-table tr:nth-child(even) td { background: #fbfbfb; }
+
+        .warning-box {
+            width: 100%;
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            color: #856404;
+            border-radius: 4px;
+            padding: 10px 12px;
+            margin: 8px 0;
+            font-size: 13px;
+            line-height: 1.45;
+            box-sizing: border-box;
+        }
+
+        .status-good { color: #44bd32; font-weight: 600; }
+        .status-bad { color: #e84118; font-weight: 600; }
+        .status-warn { color: #b8860b; font-weight: 600; }
+        .status-muted { color: #718093; }
+
         /* Paint Toolbar */
         .paint-toolbar {
             display: none;
@@ -315,6 +352,7 @@
         <button class="tab-btn active" onclick="switchTab(event, 'basic')" data-i18n="basic">Basic</button>
         <button class="tab-btn" onclick="switchTab(event, 'adme')" data-i18n="adme">ADME <span class="badge badge-new">NEW</span></button>
         <button class="tab-btn" onclick="switchTab(event, 'analysis')" data-i18n="analysis">Analysis <span class="badge badge-new">NEW</span></button>
+        <button class="tab-btn" onclick="switchTab(event, 'huckel')" data-i18n="huckel">Hückel π <span class="badge badge-new">NEW</span></button>
         <button class="tab-btn" onclick="switchTab(event, 'advanced')" data-i18n="advanced">Advanced <span class="badge badge-new">NEW</span></button>
         <button class="tab-btn" onclick="switchTab(event, '3d')" data-i18n="viewer3d">3D Viewer <span class="badge badge-new">NEW</span></button>
         <button class="tab-btn" onclick="switchTab(event, 'nmr')" data-i18n="nmr">NMR <span class="badge badge-new">NEW</span></button>
@@ -374,6 +412,17 @@
                 <button class="btn-desc" onclick="getDescriptors()" data-i18n="descriptors">All Descriptors (200+)</button>
             </div>
             <div id="analysis_out" class="output-box">Analysis results will appear here...</div>
+        </div>
+    </div>
+
+    <!-- Hückel / π-system Tools -->
+    <div id="tab-huckel" class="tab-content">
+        <div class="tools-panel">
+            <div class="tools-row">
+                <button class="btn-tool" onclick="getHuckelAnalysis()" data-i18n="huckelBtn">Analyze π-system / Hückel</button>
+            </div>
+            <div class="warning-box" data-i18n="huckelPlanarNote">Hückel rule applies to planar fully conjugated rings. This is a heuristic; RDKit aromaticity is shown separately.</div>
+            <div id="huckel_out" class="output-box">Hybridization and π-system analysis will appear here...</div>
         </div>
     </div>
 
@@ -514,6 +563,7 @@
             <div class="tools-row">
                 <button class="btn-tool" onclick="getRingConformation()" data-i18n="ringconfBtn">Analyze Ring Conformations</button>
             </div>
+            <div class="warning-box" data-i18n="ringConfWarning">⚠️ WARNING: ring conformation analysis is approximate. Values may be inaccurate.</div>
             <div id="ringconf_out" class="output-box">Ring conformation analysis will appear here...</div>
         </div>
     </div>
@@ -779,6 +829,46 @@
             advancedOut: 'Результаты поиска и сходства появятся здесь...',
             admeOut: 'ADME свойства появятся здесь...',
             analysisOut: 'Результаты анализа появятся здесь...',
+            huckel: 'Хюккель π',
+            huckelBtn: 'Анализ π-системы / Хюккель',
+            huckelOut: 'Результаты анализа гибридизации и π-системы появятся здесь...',
+            loadingHuckel: 'Анализ гибридизации и π-электронов...',
+            huckelTitle: 'Гибридизация, π-электроны и ароматичность',
+            huckelSummary: 'Сводка',
+            huckelAtoms: 'Атомы',
+            huckelRings: 'Циклические системы',
+            huckelIndex: '№',
+            huckelElement: 'Элемент',
+            huckelHybridization: 'Гибридизация',
+            huckelCharge: 'Заряд',
+            huckelLonePairs: 'Неподелённые пары',
+            huckelPiElectrons: 'π-электроны',
+            huckelPOribital: 'p-орбиталь',
+            huckelAromatic: 'Ароматический',
+            huckelHeterocycle: 'Гетероцикл',
+            huckelSystem: 'Система',
+            huckelSize: 'Размер',
+            huckelRingAtoms: 'Атомы',
+            huckelStatus: 'Статус',
+            huckelNoRings: 'Циклы не найдены',
+            huckelTotalRingPi: 'Σ π-электронов в циклах',
+            huckelRdkitAromatic: 'Ароматичность RDKit',
+            huckelHuckelAromatic: 'Ароматичность по Хюккелю',
+            huckelAromaticStatus: 'Ароматическая (4n+2)',
+            huckelAntiaromaticStatus: 'Антиароматическая (4n)',
+            huckelNonaromaticStatus: 'Неароматическая',
+            huckelNonconjugatedStatus: 'Не сопряжена',
+            huckelYes: 'Да',
+            huckelNo: 'Нет',
+            huckelPlanarNote: 'Правило Хюккеля применимо к плоским полностью сопряжённым циклам. Оценка эвристическая; ароматичность RDKit показана отдельно.',
+            huckelPolycyclicNote: 'Для фузионных/полициклических систем простой подсчёт 4n+2 может быть неточным — ориентируйтесь также на RDKit.',
+            pOrbitalBond: 'p¹ (π-связь)',
+            pOrbitalLonePair: 'p² (неподелённая пара)',
+            pOrbitalRadical: 'p¹ (радикал)',
+            pOrbitalEmpty: 'p⁰ (пустая)',
+            pOrbitalExocyclic: 'p (экзоциклическая связь)',
+            pOrbitalNone: 'нет p-орбитали',
+            ringConfWarning: '⚠️ ВНИМАНИЕ: определение конформации кольца приблизительное. Значения Q/q, θ, φ и тип конформации могут быть неточными, особенно для гибких, фузионных и не-6-членных циклов.',
             reactionOut: 'Продукты реакции появятся здесь...',
             inchikeyOut: 'Результаты поиска по InChIKey появятся здесь...',
             error: 'Ошибка',
@@ -929,6 +1019,46 @@
             advancedOut: 'Search & similarity results will appear here...',
             admeOut: 'ADME properties will appear here...',
             analysisOut: 'Analysis results will appear here...',
+            huckel: 'Hückel π',
+            huckelBtn: 'Analyze π-system / Hückel',
+            huckelOut: 'Hybridization and π-system analysis will appear here...',
+            loadingHuckel: 'Analyzing hybridization and π-electrons...',
+            huckelTitle: 'Hybridization, π-electrons and aromaticity',
+            huckelSummary: 'Summary',
+            huckelAtoms: 'Atoms',
+            huckelRings: 'Ring systems',
+            huckelIndex: '#',
+            huckelElement: 'Element',
+            huckelHybridization: 'Hybridization',
+            huckelCharge: 'Charge',
+            huckelLonePairs: 'Lone pairs',
+            huckelPiElectrons: 'π-electrons',
+            huckelPOribital: 'p-orbital',
+            huckelAromatic: 'Aromatic',
+            huckelHeterocycle: 'Heterocycle',
+            huckelSystem: 'System',
+            huckelSize: 'Size',
+            huckelRingAtoms: 'Atoms',
+            huckelStatus: 'Status',
+            huckelNoRings: 'No rings found',
+            huckelTotalRingPi: 'Σ ring π-electrons',
+            huckelRdkitAromatic: 'RDKit aromatic',
+            huckelHuckelAromatic: 'Hückel aromatic',
+            huckelAromaticStatus: 'Aromatic (4n+2)',
+            huckelAntiaromaticStatus: 'Antiaromatic (4n)',
+            huckelNonaromaticStatus: 'Non-aromatic',
+            huckelNonconjugatedStatus: 'Not conjugated',
+            huckelYes: 'Yes',
+            huckelNo: 'No',
+            huckelPlanarNote: 'Hückel rule applies to planar fully conjugated rings. This is a heuristic; RDKit aromaticity is shown separately.',
+            huckelPolycyclicNote: 'For fused/polycyclic systems the simple 4n+2 count may be inaccurate — also use the RDKit result.',
+            pOrbitalBond: 'p¹ (π-bond)',
+            pOrbitalLonePair: 'p² (lone pair)',
+            pOrbitalRadical: 'p¹ (radical)',
+            pOrbitalEmpty: 'p⁰ (empty)',
+            pOrbitalExocyclic: 'p (exocyclic bond)',
+            pOrbitalNone: 'no p-orbital',
+            ringConfWarning: '⚠️ WARNING: ring conformation analysis is approximate. Q/q, θ, φ values and the conformation type may be inaccurate, especially for flexible, fused and non-6-membered rings.',
             reactionOut: 'Reaction products will appear here...',
             inchikeyOut: 'InChIKey lookup results will appear here...',
             error: 'Error',
@@ -1079,6 +1209,46 @@
             advancedOut: 'Результати пошуку та схожості з\'являться тут...',
             admeOut: 'ADME властивості з\'являться тут...',
             analysisOut: 'Результати аналізу з\'являться тут...',
+            huckel: 'Гюккель π',
+            huckelBtn: 'Аналіз π-системи / Гюккель',
+            huckelOut: 'Результати аналізу гібридизації та π-системи з\'являться тут...',
+            loadingHuckel: 'Аналіз гібридизації та π-електронів...',
+            huckelTitle: 'Гібридизація, π-електрони та ароматичність',
+            huckelSummary: 'Підсумок',
+            huckelAtoms: 'Атоми',
+            huckelRings: 'Циклічні системи',
+            huckelIndex: '№',
+            huckelElement: 'Елемент',
+            huckelHybridization: 'Гібридизація',
+            huckelCharge: 'Заряд',
+            huckelLonePairs: 'Неподілені пари',
+            huckelPiElectrons: 'π-електрони',
+            huckelPOribital: 'p-орбіталь',
+            huckelAromatic: 'Ароматичний',
+            huckelHeterocycle: 'Гетероцикл',
+            huckelSystem: 'Система',
+            huckelSize: 'Розмір',
+            huckelRingAtoms: 'Атоми',
+            huckelStatus: 'Статус',
+            huckelNoRings: 'Цикли не знайдено',
+            huckelTotalRingPi: 'Σ π-електронів у циклах',
+            huckelRdkitAromatic: 'Ароматичність RDKit',
+            huckelHuckelAromatic: 'Ароматичність за Гюккелем',
+            huckelAromaticStatus: 'Ароматична (4n+2)',
+            huckelAntiaromaticStatus: 'Антиароматична (4n)',
+            huckelNonaromaticStatus: 'Неароматична',
+            huckelNonconjugatedStatus: 'Не спряжена',
+            huckelYes: 'Так',
+            huckelNo: 'Ні',
+            huckelPlanarNote: 'Правило Гюккеля застосовне до плоских повністю спряжених циклів. Оцінка евристична; ароматичність RDKit показана окремо.',
+            huckelPolycyclicNote: 'Для фузійних/поліциклічних систем простий підрахунок 4n+2 може бути неточним — орієнтуйтеся також на RDKit.',
+            pOrbitalBond: 'p¹ (π-зв\'язок)',
+            pOrbitalLonePair: 'p² (неподілена пара)',
+            pOrbitalRadical: 'p¹ (радикал)',
+            pOrbitalEmpty: 'p⁰ (порожня)',
+            pOrbitalExocyclic: 'p (екзоциклічний зв\'язок)',
+            pOrbitalNone: 'немає p-орбіталі',
+            ringConfWarning: '⚠️ УВАГА: визначення конформації кільця наближене. Значення Q/q, θ, φ і тип конформації можуть бути неточними, особливо для гнучких, фузійних і не-6-членних кілець.',
             reactionOut: 'Продукти реакції з\'являться тут...',
             inchikeyOut: 'Результати пошуку за InChIKey з\'являться тут...',
             error: 'Помилка',
@@ -1229,6 +1399,46 @@
             advancedOut: 'Los resultados de búsqueda y similitud aparecerán aquí...',
             admeOut: 'Las propiedades ADME aparecerán aquí...',
             analysisOut: 'Los resultados del análisis aparecerán aquí...',
+            huckel: 'Hückel π',
+            huckelBtn: 'Analizar sistema π / Hückel',
+            huckelOut: 'El análisis de hibridación y del sistema π aparecerá aquí...',
+            loadingHuckel: 'Analizando hibridación y electrones π...',
+            huckelTitle: 'Hibridación, electrones π y aromaticidad',
+            huckelSummary: 'Resumen',
+            huckelAtoms: 'Átomos',
+            huckelRings: 'Sistemas de anillos',
+            huckelIndex: 'N.º',
+            huckelElement: 'Elemento',
+            huckelHybridization: 'Hibridación',
+            huckelCharge: 'Carga',
+            huckelLonePairs: 'Pares solitarios',
+            huckelPiElectrons: 'Electrones π',
+            huckelPOribital: 'Orbital p',
+            huckelAromatic: 'Aromático',
+            huckelHeterocycle: 'Heterociclo',
+            huckelSystem: 'Sistema',
+            huckelSize: 'Tamaño',
+            huckelRingAtoms: 'Átomos',
+            huckelStatus: 'Estado',
+            huckelNoRings: 'No se encontraron anillos',
+            huckelTotalRingPi: 'Σ electrones π en anillos',
+            huckelRdkitAromatic: 'Aromático RDKit',
+            huckelHuckelAromatic: 'Aromático Hückel',
+            huckelAromaticStatus: 'Aromático (4n+2)',
+            huckelAntiaromaticStatus: 'Antiaromático (4n)',
+            huckelNonaromaticStatus: 'No aromático',
+            huckelNonconjugatedStatus: 'No conjugado',
+            huckelYes: 'Sí',
+            huckelNo: 'No',
+            huckelPlanarNote: 'La regla de Hückel se aplica a anillos planos totalmente conjugados. Es una heurística; la aromaticidad de RDKit se muestra por separado.',
+            huckelPolycyclicNote: 'Para sistemas fusionados/policíclicos, el simple recuento 4n+2 puede ser inexacto; use también el resultado de RDKit.',
+            pOrbitalBond: 'p¹ (enlace π)',
+            pOrbitalLonePair: 'p² (par solitario)',
+            pOrbitalRadical: 'p¹ (radical)',
+            pOrbitalEmpty: 'p⁰ (vacío)',
+            pOrbitalExocyclic: 'p (enlace exocíclico)',
+            pOrbitalNone: 'sin orbital p',
+            ringConfWarning: '⚠️ ADVERTENCIA: el análisis de conformación de anillos es aproximado. Los valores Q/q, θ, φ y el tipo de conformación pueden ser inexactos, especialmente para anillos flexibles, fusionados y de tamaño distinto de 6.',
             reactionOut: 'Los productos de la reacción aparecerán aquí...',
             inchikeyOut: 'Los resultados de búsqueda por InChIKey aparecerán aquí...',
             error: 'Error',
@@ -2327,6 +2537,9 @@
             const data = await res.json();
             if (res.ok) {
                 let html = `<b>Ring Conformation Analysis</b><br>`;
+                if (data.warning) {
+                    html += `<div class="warning-box">${escapeHtml(data.warning)}</div>`;
+                }
                 html += `<b>Total rings:</b> ${escapeHtml(data.total_rings)}<br><br>`;
                 data.rings.forEach((ring, i) => {
                     html += `<b>Ring ${i + 1}</b> (size: ${escapeHtml(ring.ring_size)})<br>`;
@@ -2347,6 +2560,121 @@
                 out.innerHTML = html;
             } else out.innerHTML = `<span style="color:red">Error: ${escapeHtml(data.detail)}</span>`;
         } catch (e) { out.innerHTML = "API Connection Error"; }
+    }
+
+    // --- Hückel / π-system Endpoints ---
+
+    const P_ORBITAL_LABELS = {
+        bond: 'pOrbitalBond',
+        lone_pair: 'pOrbitalLonePair',
+        radical: 'pOrbitalRadical',
+        empty: 'pOrbitalEmpty',
+        exocyclic: 'pOrbitalExocyclic',
+        none: 'pOrbitalNone'
+    };
+    const HUCKEL_STATUS_LABELS = {
+        aromatic: 'huckelAromaticStatus',
+        antiaromatic: 'huckelAntiaromaticStatus',
+        nonaromatic: 'huckelNonaromaticStatus',
+        nonconjugated: 'huckelNonconjugatedStatus'
+    };
+    function formatFormalCharge(value) {
+        return value > 0 ? `+${value}` : `${value}`;
+    }
+    function huckelStatusClass(status) {
+        if (status === 'aromatic') return 'status-good';
+        if (status === 'antiaromatic') return 'status-bad';
+        return 'status-muted';
+    }
+
+    async function getHuckelAnalysis() {
+        const smiles = document.getElementById('smiles').value.trim();
+        const out = document.getElementById('huckel_out');
+        if (!smiles) return;
+        out.innerHTML = t('loadingHuckel');
+        try {
+            const res = await fetch(`${rdkit_api_h}rdkit/api/huckel?smiles=${encodeURIComponent(smiles)}&lang=${currentLang}`);
+            const data = await res.json();
+            if (!res.ok) {
+                out.innerHTML = `<span style="color:red">Error: ${escapeHtml(data.detail || 'Invalid input')}</span>`;
+                return;
+            }
+
+            const summary = data.summary || {};
+            const hc = summary.hybridization_counts || {};
+            const hybridParts = [];
+            ['sp', 'sp2', 'sp3', 'sp3d', 'sp3d2', 'other'].forEach(h => {
+                if (hc[h]) hybridParts.push(`<b>${escapeHtml(h)}</b>: ${escapeHtml(hc[h])}`);
+            });
+
+            let html = `<b>${escapeHtml(t('huckelTitle'))}</b>`;
+            html += `<div style="margin-top:6px;"><b>${escapeHtml(t('huckelSummary'))}:</b> `;
+            html += `${hybridParts.join(' | ') || '—'}`;
+            html += ` | <b>${escapeHtml(t('huckelTotalRingPi'))}:</b> ${escapeHtml(summary.total_ring_pi_electrons || 0)}`;
+            html += ` | <b>${escapeHtml(t('huckelRdkitAromatic'))}:</b> ${summary.rdkit_aromatic ? escapeHtml(t('huckelYes')) : escapeHtml(t('huckelNo'))}`;
+            html += ` | <b>${escapeHtml(t('huckelHuckelAromatic'))}:</b> ${escapeHtml(summary.huckel_aromatic_ring_systems || 0)}/${escapeHtml(summary.total_ring_systems || 0)}`;
+            html += `</div>`;
+
+            html += `<h4 style="margin:12px 0 4px;">${escapeHtml(t('huckelAtoms'))}</h4>`;
+            html += `<table class="result-table"><thead><tr>`;
+            html += `<th>${escapeHtml(t('huckelIndex'))}</th><th>${escapeHtml(t('huckelElement'))}</th>`;
+            html += `<th>${escapeHtml(t('huckelHybridization'))}</th><th>${escapeHtml(t('huckelCharge'))}</th>`;
+            html += `<th>${escapeHtml(t('huckelLonePairs'))}</th><th>${escapeHtml(t('huckelPiElectrons'))}</th>`;
+            html += `<th>${escapeHtml(t('huckelPOribital'))}</th><th>${escapeHtml(t('huckelAromatic'))}</th>`;
+            html += `</tr></thead><tbody>`;
+            (data.atoms || []).forEach(atom => {
+                const pKey = P_ORBITAL_LABELS[atom.p_orbital_status] || 'pOrbitalNone';
+                const ringMark = atom.in_ring ? ' ⟳' : '';
+                html += `<tr>`;
+                html += `<td>${escapeHtml(atom.index)}</td>`;
+                html += `<td>${escapeHtml(atom.element)}${ringMark}</td>`;
+                html += `<td>${escapeHtml(atom.hybridization)}</td>`;
+                html += `<td>${escapeHtml(formatFormalCharge(atom.formal_charge))}</td>`;
+                html += `<td>${atom.lone_pairs === null || atom.lone_pairs === undefined ? '—' : escapeHtml(atom.lone_pairs)}</td>`;
+                html += `<td>${escapeHtml(atom.pi_electrons)}</td>`;
+                html += `<td>${escapeHtml(t(pKey))}</td>`;
+                html += `<td>${atom.is_aromatic ? '✓' : '—'}</td>`;
+                html += `</tr>`;
+            });
+            html += `</tbody></table>`;
+
+            html += `<h4 style="margin:14px 0 4px;">${escapeHtml(t('huckelRings'))}</h4>`;
+            if (!data.ring_systems || data.ring_systems.length === 0) {
+                html += `<div class="status-muted">${escapeHtml(t('huckelNoRings'))}</div>`;
+            } else {
+                html += `<table class="result-table"><thead><tr>`;
+                html += `<th>${escapeHtml(t('huckelSystem'))}</th><th>${escapeHtml(t('huckelRingAtoms'))}</th>`;
+                html += `<th>${escapeHtml(t('huckelSize'))}</th><th>${escapeHtml(t('huckelHeterocycle'))}</th>`;
+                html += `<th>${escapeHtml(t('huckelPiElectrons'))}</th><th>${escapeHtml(t('huckelHuckelAromatic'))}</th>`;
+                html += `<th>${escapeHtml(t('huckelRdkitAromatic'))}</th><th>${escapeHtml(t('huckelStatus'))}</th>`;
+                html += `</tr></thead><tbody>`;
+                data.ring_systems.forEach(system => {
+                    const huckel = system.huckel || {};
+                    const statusKey = HUCKEL_STATUS_LABELS[huckel.status] || 'huckelNonaromaticStatus';
+                    const huckelText = huckel.is_huckel_aromatic
+                        ? `${escapeHtml(t('huckelYes'))} (${escapeHtml(huckel.formula)})`
+                        : `${escapeHtml(t('huckelNo'))} (${escapeHtml(huckel.formula)})`;
+                    html += `<tr>`;
+                    html += `<td>${escapeHtml(system.id)}</td>`;
+                    html += `<td>${escapeHtml((system.atom_indices || []).join(', '))}</td>`;
+                    html += `<td>${escapeHtml(system.size)}</td>`;
+                    html += `<td>${system.heterocycle ? escapeHtml(t('huckelYes')) : escapeHtml(t('huckelNo'))}</td>`;
+                    html += `<td><b>${escapeHtml(system.pi_electrons)}</b></td>`;
+                    html += `<td>${huckelText}</td>`;
+                    html += `<td>${system.rdkit_aromatic ? escapeHtml(t('huckelYes')) : escapeHtml(t('huckelNo'))}</td>`;
+                    html += `<td class="${huckelStatusClass(huckel.status)}">${escapeHtml(t(statusKey))}</td>`;
+                    html += `</tr>`;
+                    if (system.polycyclic) {
+                        html += `<tr><td colspan="8" class="status-muted">${escapeHtml(t('huckelPolycyclicNote'))}</td></tr>`;
+                    }
+                });
+                html += `</tbody></table>`;
+            }
+
+            out.innerHTML = html;
+        } catch (e) {
+            out.innerHTML = t('apiConnectionError');
+        }
     }
 
     // --- Name to SMILES Endpoints ---

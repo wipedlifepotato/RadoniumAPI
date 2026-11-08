@@ -199,6 +199,12 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "en": "All RDKit descriptors (200+)",
         "es": "Todos los descriptores RDKit (200+)",
     },
+    "ep_hybridization_desc": {
+        "ru": "Гибридизация, π-электроны и ароматичность по правилу Хюккеля",
+        "uk": "Гібридизація, π-електрони та ароматичність за правилом Гюккеля",
+        "en": "Hybridization, π-electrons and Hückel aromaticity",
+        "es": "Hibridación, electrones π y aromaticidad de Hückel",
+    },
     "ep_reaction_desc": {
         "ru": "Применение реакций (SMIRKS)",
         "uk": "Застосування реакцій (SMIRKS)",
@@ -1138,6 +1144,12 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "uk": "Цикли в молекулі не знайдено",
         "en": "No rings found in the molecule",
         "es": "No se encontraron anillos en la molécula",
+    },
+    "ring_conf_warning": {
+        "ru": "⚠️ ВНИМАНИЕ: определение конформации кольца приблизительное. Значения Q/q, θ, φ и тип конформации могут быть неточными, особенно для гибких, фузионных и не-6-членных циклов. Результат зависит от сгенерированных конформеров и силового поля.",
+        "uk": "⚠️ УВАГА: визначення конформації кільця наближене. Значення Q/q, θ, φ і тип конформації можуть бути неточними, особливо для гнучких, фузійних і не-6-членних кілець. Результат залежить від згенерованих конформерів і силового поля.",
+        "en": "⚠️ WARNING: ring conformation analysis is approximate. Q/q, θ, φ values and the conformation type may be inaccurate, especially for flexible, fused and non-6-membered rings. Results depend on generated conformers and the force field.",
+        "es": "⚠️ ADVERTENCIA: el análisis de conformación de anillos es aproximado. Los valores Q/q, θ, φ y el tipo de conformación pueden ser inexactos, especialmente para anillos flexibles, fusionados y de tamaño distinto de 6. Los resultados dependen de los confórmeros generados y del campo de fuerza.",
     },
 }
 

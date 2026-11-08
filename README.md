@@ -35,6 +35,8 @@ A web application for molecular analysis, chemoinformatics, and synthesis planni
 ### Analysis & Reactions
 - pKa Estimation: Acidic and basic centers
 - 200+ Descriptors: Full set of RDKit descriptors
+- Hybridization & Hückel: sp/sp²/sp³ hybridization, π-electrons, lone pairs, free/occupied p-orbitals, 4n+2 aromaticity and heterocycle detection
+- Ring Conformation: Cremer–Pople puckering parameters (approximate — values may be inaccurate, see the in-app warning)
 
 ### NMR & Spectroscopy
 - 1H NMR: Heuristic proton chemical shift estimation

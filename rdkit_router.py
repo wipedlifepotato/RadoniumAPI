@@ -49,6 +49,7 @@ async def rdkit_index(lang: str = Depends(get_lang)):
             "GET /rdkit/api/validate": get_text("ep_validate_desc", lang),
             "GET /rdkit/api/pka": get_text("ep_pka_desc", lang),
             "GET /rdkit/api/descriptors": get_text("ep_descriptors_desc", lang),
+            "GET /rdkit/api/huckel": get_text("ep_hybridization_desc", lang),
         },
         get_text("rdkit_index_reactions", lang): {
             "GET /rdkit/api/reaction": get_text("ep_reaction_desc", lang),
@@ -806,6 +807,408 @@ def get_all_descriptors(
             "descriptors": descriptors,
             "extra_descriptors": extra,
         }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Гибридизация, π-электроны и ароматичность по правилу Хюккеля
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Число валентных электронов для основных элементов (для расчёта
+# неподелённых пар и свободных p-орбиталей).
+_VALENCE_ELECTRONS = {
+    1: 1,
+    5: 3,
+    6: 4,
+    7: 5,
+    8: 6,
+    9: 7,
+    14: 4,
+    15: 5,
+    16: 6,
+    17: 7,
+    31: 3,
+    32: 4,
+    33: 5,
+    34: 6,
+    35: 7,
+    49: 3,
+    50: 4,
+    51: 5,
+    52: 6,
+    53: 7,
+    81: 3,
+    82: 4,
+    83: 5,
+    84: 6,
+    85: 7,
+}
+
+_HYBRIDIZATION_LABELS = {
+    rdchem.HybridizationType.S: "s",
+    rdchem.HybridizationType.SP: "sp",
+    rdchem.HybridizationType.SP2: "sp2",
+    rdchem.HybridizationType.SP2D: "sp2d",
+    rdchem.HybridizationType.SP3: "sp3",
+    rdchem.HybridizationType.SP3D: "sp3d",
+    rdchem.HybridizationType.SP3D2: "sp3d2",
+    rdchem.HybridizationType.OTHER: "other",
+    rdchem.HybridizationType.UNSPECIFIED: "unspecified",
+}
+
+
+def _hybridization_label(atom) -> str:
+    """Название гибридизации атома в привычной записи (sp, sp², sp³...)."""
+    hybrid = atom.GetHybridization()
+    # RDKit иногда помечает ароматический бор как sp из-за валентности.
+    # В ароматическом цикле такой атом фактически sp².
+    if (
+        atom.GetIsAromatic()
+        and hybrid == rdchem.HybridizationType.SP
+        and not any(b.GetBondType() == Chem.BondType.TRIPLE for b in atom.GetBonds())
+        and atom.GetDegree() >= 2
+    ):
+        return "sp2"
+    return _HYBRIDIZATION_LABELS.get(hybrid, "unspecified")
+
+
+def _atom_total_valence(atom) -> int:
+    """Полная валентность атома с учётом неявных водородов."""
+    try:
+        explicit = int(atom.GetValence(rdchem.ValenceType.EXPLICIT))
+        return explicit + int(atom.GetNumImplicitHs())
+    except Exception:
+        try:
+            return int(atom.GetTotalValence())
+        except Exception:
+            return 0
+
+
+def _atom_lone_pairs(atom):
+    """Оценка числа неподелённых электронных пар на атоме."""
+    valence_electrons = _VALENCE_ELECTRONS.get(atom.GetAtomicNum())
+    if valence_electrons is None:
+        return None
+    lone_pairs = (
+        valence_electrons - int(atom.GetFormalCharge()) - _atom_total_valence(atom)
+    ) / 2.0
+    if lone_pairs < 0:
+        return 0
+    rounded = round(lone_pairs)
+    return int(rounded) if abs(lone_pairs - rounded) < 1e-6 else round(lone_pairs, 2)
+
+
+def _atom_has_multiple_bond(atom) -> bool:
+    """Есть ли у атома кратная связь (включая ароматическую)."""
+    for bond in atom.GetBonds():
+        if bond.GetIsAromatic() or bond.GetBondType() in (
+            Chem.BondType.DOUBLE,
+            Chem.BondType.TRIPLE,
+        ):
+            return True
+    return False
+
+
+def _atom_has_p_orbital(atom) -> bool:
+    """Может ли атом участвовать в π-системе через p-орбиталь."""
+    if atom.GetIsAromatic():
+        return True
+    if atom.GetHybridization() in (
+        rdchem.HybridizationType.SP,
+        rdchem.HybridizationType.SP2,
+    ):
+        return True
+    return _atom_has_multiple_bond(atom)
+
+
+def _kekulized_copy(mol):
+    """Копия молекулы с явными двойными связями (для подсчёта π-электронов)."""
+    kekulized = Chem.Mol(mol)
+    try:
+        Chem.Kekulize(kekulized, clearAromaticFlags=True)
+        return kekulized, True
+    except Exception:
+        # Для нестандартных ароматических систем оставляем исходные связи.
+        return Chem.Mol(mol), False
+
+
+def _has_internal_multiple_bond(kekulized_mol, atom_idx: int, atom_set) -> bool:
+    """Есть ли у атома кратная связь с другим атомом из того же цикла."""
+    try:
+        atom = kekulized_mol.GetAtomWithIdx(atom_idx)
+    except Exception:
+        return False
+    for bond in atom.GetBonds():
+        if bond.GetBondType() in (Chem.BondType.DOUBLE, Chem.BondType.TRIPLE):
+            if bond.GetOtherAtomIdx(atom_idx) in atom_set:
+                return True
+    return False
+
+
+def _atom_pi_contribution(atom, kekulized_mol, atom_set):
+    """
+    Вклад атома в π-систему (0, 1 или 2 электрона).
+
+    Возвращает (число π-электронов, код состояния p-орбитали):
+      bond        — атом участвует в кратной связи (p¹);
+      lone_pair   — неподелённая пара в p-орбитали (p²);
+      radical     — неспаренный электрон (p¹);
+      empty       — пустая p-орбиталь (p⁰);
+      exocyclic   — p-орбиталь занята экзоциклической кратной связью;
+      none        — p-орбитали нет / атом не участвует.
+    """
+    if not _atom_has_p_orbital(atom):
+        return 0, "none"
+
+    if _has_internal_multiple_bond(kekulized_mol, atom.GetIdx(), atom_set):
+        return 1, "bond"
+
+    if atom.GetNumRadicalElectrons() > 0:
+        return 1, "radical"
+
+    lone_pairs = _atom_lone_pairs(atom)
+    if lone_pairs is not None and lone_pairs > 0 and atom.GetFormalCharge() <= 0:
+        # Углерод/бор с неподелённой парой участвует в π-системе только
+        # если он sp²/sp (карбанион, карбен), а не насыщенный sp³-атом.
+        if atom.GetAtomicNum() in (5, 6):
+            if atom.GetHybridization() in (
+                rdchem.HybridizationType.SP,
+                rdchem.HybridizationType.SP2,
+            ) or atom.GetIsAromatic():
+                return 2, "lone_pair"
+            return 0, "none"
+        return 2, "lone_pair"
+
+    if atom.GetFormalCharge() > 0:
+        return 0, "empty"
+
+    # p-Орбиталь занята экзоциклической кратной связью,
+    # но в π-систему самого цикла электрон не отдаёт.
+    for bond in atom.GetBonds():
+        if bond.GetBondType() in (Chem.BondType.DOUBLE, Chem.BondType.TRIPLE):
+            return 0, "exocyclic"
+
+    return 0, "none"
+
+
+def _ring_systems(mol):
+    """
+    Объединяет SSSR-циклы в циклические системы (фузионные циклы — вместе).
+    Возвращает список множеств индексов атомов.
+    """
+    rings = [set(ring) for ring in mol.GetRingInfo().AtomRings()]
+    if not rings:
+        return []
+
+    parent = list(range(len(rings)))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        root_a, root_b = find(a), find(b)
+        if root_a != root_b:
+            parent[root_b] = root_a
+
+    for i in range(len(rings)):
+        for j in range(i + 1, len(rings)):
+            if rings[i] & rings[j]:
+                union(i, j)
+
+    groups = {}
+    for i, ring in enumerate(rings):
+        groups.setdefault(find(i), set()).update(ring)
+
+    return sorted(groups.values(), key=lambda atoms: min(atoms))
+
+
+def _huckel_status(pi_electrons: int, conjugated: bool) -> dict:
+    """Проверка простого правила Хюккеля 4n+2 для циклической системы."""
+    if not conjugated:
+        return {
+            "is_huckel_aromatic": False,
+            "status": "nonconjugated",
+            "n": None,
+            "formula": "not conjugated",
+        }
+    if pi_electrons >= 2 and pi_electrons % 4 == 2:
+        n = (pi_electrons - 2) // 4
+        return {
+            "is_huckel_aromatic": True,
+            "status": "aromatic",
+            "n": n,
+            "formula": f"4n+2 (n={n})",
+        }
+    if pi_electrons > 0 and pi_electrons % 4 == 0:
+        n = pi_electrons // 4
+        return {
+            "is_huckel_aromatic": False,
+            "status": "antiaromatic",
+            "n": n,
+            "formula": f"4n (n={n})",
+        }
+    return {
+        "is_huckel_aromatic": False,
+        "status": "nonaromatic",
+        "n": None,
+        "formula": "not 4n+2",
+    }
+
+
+@router.get(
+    "/huckel",
+    summary="Гибридизация, π-электроны и ароматичность (правило Хюккеля)",
+)
+def analyze_huckel_aromaticity(
+    smiles: str = Query(..., description=get_text("param_smiles")),
+    lang: str = Depends(get_lang),
+):
+    """
+    Анализ гибридизации атомов, π-электронов и ароматичности циклов.
+
+    Для каждого тяжёлого атома возвращает гибридизацию (sp/sp²/sp³...),
+    формальный заряд, число неподелённых пар, вклад в π-систему и
+    состояние p-орбитали. Для каждой циклической системы (фузионные
+    циклы объединяются) считает число π-электронов и проверяет правило
+    Хюккеля 4n+2. Дополнительно показывает ароматичность по RDKit.
+
+    **Пример запроса:**
+    ```
+    GET /rdkit/api/huckel?smiles=c1cc[nH]c1&lang=ru
+    ```
+    """
+    try:
+        m = Molecule(smiles)
+        if m.m is None:
+            raise ValueError(get_text("invalid_smiles", lang))
+
+        mol = m.m
+        kekulized_mol, kekulized_ok = _kekulized_copy(mol)
+        systems = _ring_systems(mol)
+        all_heavy_atoms = {
+            atom.GetIdx() for atom in mol.GetAtoms() if atom.GetAtomicNum() != 1
+        }
+
+        atom_to_system = {}
+        for system in systems:
+            for atom_idx in system:
+                atom_to_system[atom_idx] = system
+
+        atoms_data = []
+        atom_pi_electrons = {}
+        hybridization_counts = {}
+        for atom in mol.GetAtoms():
+            if atom.GetAtomicNum() == 1:
+                continue
+
+            atom_idx = atom.GetIdx()
+            system = atom_to_system.get(atom_idx)
+            # Для атомов вне циклов считаем локальный вклад в π-систему
+            # (например, C=O, C=C, неподелённая пара амина).
+            contribution_set = system if system is not None else all_heavy_atoms
+            pi_electrons, p_orbital_status = _atom_pi_contribution(
+                atom, kekulized_mol, contribution_set
+            )
+            atom_pi_electrons[atom_idx] = pi_electrons
+
+            hybridization = _hybridization_label(atom)
+            hybridization_counts[hybridization] = (
+                hybridization_counts.get(hybridization, 0) + 1
+            )
+
+            atoms_data.append(
+                {
+                    "index": atom_idx,
+                    "element": atom.GetSymbol(),
+                    "hybridization": hybridization,
+                    "formal_charge": int(atom.GetFormalCharge()),
+                    "lone_pairs": _atom_lone_pairs(atom),
+                    "radical_electrons": int(atom.GetNumRadicalElectrons()),
+                    "is_aromatic": bool(atom.GetIsAromatic()),
+                    "in_ring": bool(atom.IsInRing()),
+                    "pi_electrons": int(pi_electrons),
+                    "p_orbital_status": p_orbital_status,
+                }
+            )
+
+        ring_systems_data = []
+        for system_index, system in enumerate(systems, start=1):
+            pi_electrons = sum(atom_pi_electrons.get(idx, 0) for idx in system)
+            conjugated = all(
+                _atom_has_p_orbital(mol.GetAtomWithIdx(idx)) for idx in system
+            )
+            huckel = _huckel_status(pi_electrons, conjugated)
+
+            internal_bonds = [
+                bond
+                for bond in mol.GetBonds()
+                if bond.GetBeginAtomIdx() in system and bond.GetEndAtomIdx() in system
+            ]
+            rdkit_aromatic = bool(internal_bonds) and all(
+                mol.GetAtomWithIdx(idx).GetIsAromatic() for idx in system
+            ) and all(bond.GetIsAromatic() for bond in internal_bonds)
+
+            heteroatoms = [
+                {"index": idx, "element": mol.GetAtomWithIdx(idx).GetSymbol()}
+                for idx in sorted(system)
+                if mol.GetAtomWithIdx(idx).GetAtomicNum() not in (1, 6)
+            ]
+            sssr_count = sum(1 for ring in mol.GetRingInfo().AtomRings() if set(ring) & system)
+
+            ring_systems_data.append(
+                {
+                    "id": system_index,
+                    "atom_indices": sorted(system),
+                    "size": len(system),
+                    "elements": sorted(
+                        {mol.GetAtomWithIdx(idx).GetSymbol() for idx in system}
+                    ),
+                    "heterocycle": bool(heteroatoms),
+                    "heteroatoms": heteroatoms,
+                    "pi_electrons": int(pi_electrons),
+                    "is_conjugated": bool(conjugated),
+                    "kekulized": bool(kekulized_ok),
+                    "polycyclic": sssr_count > 1,
+                    "huckel": huckel,
+                    "rdkit_aromatic": rdkit_aromatic,
+                }
+            )
+
+        aromatic_ring_systems = sum(
+            1 for system in ring_systems_data if system["rdkit_aromatic"]
+        )
+        huckel_aromatic_ring_systems = sum(
+            1
+            for system in ring_systems_data
+            if system["huckel"]["is_huckel_aromatic"]
+        )
+
+        return {
+            "smiles": smiles,
+            "canonical_smiles": Chem.MolToSmiles(mol, canonical=True),
+            "summary": {
+                "total_heavy_atoms": len(all_heavy_atoms),
+                "hybridization_counts": hybridization_counts,
+                "total_ring_systems": len(ring_systems_data),
+                "aromatic_ring_systems": aromatic_ring_systems,
+                "huckel_aromatic_ring_systems": huckel_aromatic_ring_systems,
+                "total_ring_pi_electrons": sum(
+                    system["pi_electrons"] for system in ring_systems_data
+                ),
+                "has_heterocycle": any(
+                    system["heterocycle"] for system in ring_systems_data
+                ),
+                "rdkit_aromatic": aromatic_ring_systems > 0,
+            },
+            "atoms": atoms_data,
+            "ring_systems": ring_systems_data,
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -2600,6 +3003,7 @@ def _analyze_all_ring_conformations(
             "total_rings": 0,
             "rings": [],
             "message": get_text("no_rings_found", lang),
+            "warning": get_text("ring_conf_warning", lang),
         }
 
     # Генерация 20 конформеров
@@ -2695,4 +3099,5 @@ def _analyze_all_ring_conformations(
         "smiles": smiles,
         "total_rings": len(rings_data),
         "rings": rings_data,
+        "warning": get_text("ring_conf_warning", lang),
     }
