@@ -1,22 +1,26 @@
 """
-Inorganic Chemistry API Router — расширенный функционал для неорганической химии
+Inorganic Chemistry API Router — extended functionality for inorganic chemistry.
+
+Formulas, molar masses and element data come from molmass. Oxidation states
+for SMILES are computed by RDKit; formulas use a compact universal solver
+based on charge balance.
 """
 
-from fastapi import APIRouter, HTTPException, Query, Depends
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
-import urllib.parse
-import urllib.request
-import json
-import math
-import re
+from __future__ import annotations
 
-from database import get_db
-from Molecule import Molecule
-from i18n import get_text, get_lang
+from fractions import Fraction
+from functools import lru_cache, reduce
+from math import gcd
+import re
+from typing import Any, Dict, List, Optional, Tuple
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from i18n import SUPPORTED_LANGUAGES, get_text, get_lang
+from molmass import ELEMENTS as _ELEMENTS, Formula as _MolFormula
 
 from rdkit import Chem
-from rdkit.Chem import AllChem, Descriptors, rdMolDescriptors
+from rdkit.Chem import rdMolDescriptors
 
 router = APIRouter(prefix="/inorg/api", tags=["Inorganic Chemistry API"])
 
@@ -29,307 +33,779 @@ def set_proxy(proxy: str):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Константы
+# Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Электроотрицательность Полинга
-ELECTRONEGATIVITY = {
-    "H": 2.20, "He": 0.00,
-    "Li": 0.98, "Be": 1.57, "B": 2.04, "C": 2.55, "N": 3.04, "O": 3.44, "F": 3.98, "Ne": 0.00,
-    "Na": 0.93, "Mg": 1.31, "Al": 1.61, "Si": 1.90, "P": 2.19, "S": 2.58, "Cl": 3.16, "Ar": 0.00,
-    "K": 0.82, "Ca": 1.00, "Sc": 1.36, "Ti": 1.54, "V": 1.63, "Cr": 1.66, "Mn": 1.55, "Fe": 1.83,
-    "Co": 1.88, "Ni": 1.91, "Cu": 1.90, "Zn": 1.65, "Ga": 1.81, "Ge": 2.01, "As": 2.18, "Se": 2.55,
-    "Br": 2.96, "Kr": 3.00,
-    "Rb": 0.82, "Sr": 0.95, "Y": 1.22, "Zr": 1.33, "Nb": 1.60, "Mo": 2.16, "Tc": 1.90, "Ru": 2.20,
-    "Rh": 2.28, "Pd": 2.20, "Ag": 1.93, "Cd": 1.69, "In": 1.78, "Sn": 1.96, "Sb": 2.05, "Te": 2.10,
-    "I": 2.66, "Xe": 2.60,
-    "Cs": 0.79, "Ba": 0.89, "La": 1.10, "Hf": 1.30, "Ta": 1.50, "W": 2.36, "Re": 1.90, "Os": 2.20,
-    "Ir": 2.20, "Pt": 2.28, "Au": 2.54, "Hg": 2.00, "Tl": 1.62, "Pb": 2.33, "Bi": 2.02, "Po": 2.00,
-    "At": 2.20, "Rn": 0.00,
-    "Fr": 0.70, "Ra": 0.90, "Ac": 1.10, "Th": 1.30, "Pa": 1.50, "U": 1.38, "Np": 1.36, "Pu": 1.28,
-    "Am": 1.30, "Cm": 1.30, "Bk": 1.30, "Cf": 1.30, "Es": 1.30, "Fm": 1.30, "Md": 1.30, "No": 1.30,
+ALKALI_METALS = {"Li", "Na", "K", "Rb", "Cs", "Fr"}
+ALKALINE_EARTH = {"Be", "Mg", "Ca", "Sr", "Ba", "Ra"}
+
+# Elements missing from the molmass table (Z = 110…118).
+_SUPERHEAVY = {
+    "Ds": (110, 281.0, "[Rn] 5f14 6d9 7s1", "4, 3, 2, 0"),
+    "Rg": (111, 281.0, "[Rn] 5f14 6d10 7s1", "3, 1"),
+    "Cn": (112, 285.0, "[Rn] 5f14 6d10 7s2", "2, 0"),
+    "Nh": (113, 286.0, "[Rn] 5f14 6d10 7s2 7p1", "3, 1"),
+    "Fl": (114, 289.0, "[Rn] 5f14 6d10 7s2 7p2", "4, 2, 0"),
+    "Mc": (115, 288.0, "[Rn] 5f14 6d10 7s2 7p3", "3, 1"),
+    "Lv": (116, 293.0, "[Rn] 5f14 6d10 7s2 7p4", "4, 2"),
+    "Ts": (117, 294.0, "[Rn] 5f14 6d10 7s2 7p5", "-1, 1, 3, 5"),
+    "Og": (118, 294.0, "[Rn] 5f14 6d10 7s2 7p6", "2, 0"),
 }
 
-# Атомные массы
-ATOMIC_MASSES = {
-    "H": 1.008, "He": 4.003, "Li": 6.941, "Be": 9.012, "B": 10.81, "C": 12.011, "N": 14.007,
-    "O": 15.999, "F": 18.998, "Ne": 20.180, "Na": 22.990, "Mg": 24.305, "Al": 26.982,
-    "Si": 28.086, "P": 30.974, "S": 32.065, "Cl": 35.453, "Ar": 39.948, "K": 39.098,
-    "Ca": 40.078, "Sc": 44.956, "Ti": 47.867, "V": 50.942, "Cr": 51.996, "Mn": 54.938,
-    "Fe": 55.845, "Co": 58.933, "Ni": 58.693, "Cu": 63.546, "Zn": 65.380, "Ga": 69.723,
-    "Ge": 72.630, "As": 74.922, "Se": 78.971, "Br": 79.904, "Kr": 83.798, "Rb": 85.468,
-    "Sr": 87.620, "Y": 88.906, "Zr": 91.224, "Nb": 92.906, "Mo": 95.950, "Tc": 98.000,
-    "Ru": 101.070, "Rh": 102.906, "Pd": 106.420, "Ag": 107.868, "Cd": 112.414, "In": 114.818,
-    "Sn": 118.710, "Sb": 121.760, "Te": 127.600, "I": 126.904, "Xe": 131.293, "Cs": 132.905,
-    "Ba": 137.327, "La": 138.905, "Hf": 178.490, "Ta": 180.948, "W": 183.840, "Re": 186.207,
-    "Os": 190.230, "Ir": 192.217, "Pt": 195.084, "Au": 196.967, "Hg": 200.592, "Tl": 204.383,
-    "Pb": 207.200, "Bi": 208.980, "Po": 209.000, "At": 210.000, "Rn": 222.000, "Fr": 223.000,
-    "Ra": 226.000, "Ac": 227.000, "Th": 232.038, "Pa": 231.036, "U": 238.029,
+# Additional oxidation states absent from molmass, with an "unusualness" cost.
+_EXTRA_OX = {
+    "H": [(-1, 0.5), (0, 5.0)],
+    "O": [(-1, 0.5), (Fraction(-1, 2), 1.0), (Fraction(-1, 3), 1.5), (0, 5.0), (1, 5.0), (2, 0.8)],
+    "N": [(-2, 0.4), (-1, 0.8), (0, 1.0), (1, 0.9)],
+    "C": [(-3, 0.4), (-2, 0.5), (-1, 0.6), (0, 1.0), (1, 0.8), (3, 0.4)],
+    "Cl": [(2, 0.6), (4, 0.5), (6, 0.5)],
+    "Br": [(2, 0.6), (4, 0.5), (6, 0.5)],
+    "I": [(2, 0.6), (4, 0.5), (6, 0.5)],
+    "Xe": [(8, 0.8)],
 }
 
-# Типичные степени окисления
-OXIDATION_STATES = {
-    "H": [-1, 1], "Li": [1], "Be": [2], "B": [3], "C": [-4, -3, -2, -1, 0, 1, 2, 3, 4],
-    "N": [-3, -2, -1, 0, 1, 2, 3, 4, 5], "O": [-2, -1, 0, 1, 2], "F": [-1],
-    "Na": [1], "Mg": [2], "Al": [3], "Si": [-4, 4], "P": [-3, 3, 5], "S": [-2, 2, 4, 6],
-    "Cl": [-1, 1, 3, 5, 7], "K": [1], "Ca": [2], "Sc": [3], "Ti": [2, 3, 4], "V": [2, 3, 4, 5],
-    "Cr": [2, 3, 6], "Mn": [2, 3, 4, 6, 7], "Fe": [2, 3], "Co": [2, 3], "Ni": [2, 3],
-    "Cu": [1, 2], "Zn": [2], "Ga": [3], "Ge": [2, 4], "As": [-3, 3, 5], "Se": [-2, 4, 6],
-    "Br": [-1, 1, 3, 5, 7], "Rb": [1], "Sr": [2], "Y": [3], "Zr": [4], "Nb": [3, 5],
-    "Mo": [2, 3, 4, 5, 6], "Tc": [4, 7], "Ru": [2, 3, 4, 6, 8], "Rh": [2, 3, 4],
-    "Pd": [2, 4], "Ag": [1], "Cd": [2], "In": [1, 3], "Sn": [2, 4], "Sb": [-3, 3, 5],
-    "Te": [-2, 4, 6], "I": [-1, 1, 3, 5, 7], "Cs": [1], "Ba": [2], "La": [3],
-    "Hf": [4], "Ta": [5], "W": [2, 3, 4, 5, 6], "Re": [2, 3, 4, 6, 7], "Os": [2, 3, 4, 6, 8],
-    "Ir": [2, 3, 4, 6], "Pt": [2, 4], "Au": [1, 3], "Hg": [1, 2], "Tl": [1, 3],
-    "Pb": [2, 4], "Bi": [3, 5], "Po": [2, 4], "At": [-1, 1, 3, 5, 7],
-    "Fr": [1], "Ra": [2], "Ac": [3], "Th": [4], "Pa": [4, 5], "U": [3, 4, 5, 6],
-}
-
-# Таблица растворимости (упрощенная)
-# Ключи: катион, анион -> растворимость
-SOLUBILITY_TABLE = {
-    # Нитраты, ацетаты, хлораты, перхлораты - всегда растворимы
-    "NO3": "soluble", "CH3COO": "soluble", "ClO3": "soluble", "ClO4": "soluble",
-    # Хлориды, бромиды, иодиды
+# Solubility table: exceptions for salts that are usually insoluble.
+_SOLUBILITY_EXCEPTIONS = {
     "Cl": {"Ag": "insoluble", "Pb": "slightly", "Hg2": "insoluble", "Cu": "insoluble", "Tl": "insoluble"},
     "Br": {"Ag": "insoluble", "Pb": "slightly", "Hg2": "insoluble", "Cu": "insoluble", "Tl": "insoluble"},
     "I": {"Ag": "insoluble", "Pb": "insoluble", "Hg2": "insoluble", "Cu": "insoluble", "Tl": "insoluble", "Hg": "insoluble"},
-    # Сульфаты
     "SO4": {"Ba": "insoluble", "Pb": "insoluble", "Ca": "slightly", "Sr": "insoluble", "Ag": "slightly", "Hg2": "insoluble"},
-    # Сульфиды
-    "S": {"NH4": "soluble", "alkali": "soluble", "alkaline_earth": "soluble", "Mg": "slightly", "Ca": "slightly", "Sr": "slightly", "Ba": "slightly"},
-    # Карбонаты
-    "CO3": {"NH4": "soluble", "alkali": "soluble", "Mg": "slightly", "Ca": "insoluble", "Sr": "insoluble", "Ba": "insoluble", "Fe": "insoluble", "Cu": "insoluble", "Zn": "insoluble", "Ag": "insoluble"},
-    # Фосфаты
-    "PO4": {"NH4": "soluble", "alkali": "soluble", "Mg": "slightly", "Ca": "insoluble", "Sr": "insoluble", "Ba": "insoluble", "Fe": "insoluble", "Al": "insoluble"},
-    # Гидроксиды
-    "OH": {"NH4": "soluble", "alkali": "soluble", "Ba": "soluble", "Sr": "soluble", "Ca": "slightly", "Mg": "insoluble", "Al": "insoluble", "Fe": "insoluble", "Cu": "insoluble", "Zn": "insoluble", "Ag": "insoluble"},
-    # Оксалаты
-    "C2O4": {"NH4": "soluble", "alkali": "soluble", "Mg": "slightly", "Ca": "insoluble", "Sr": "insoluble", "Ba": "insoluble", "Fe": "insoluble", "Cu": "insoluble", "Zn": "insoluble"},
-    # Хроматы
-    "CrO4": {"NH4": "soluble", "alkali": "soluble", "Mg": "soluble", "Ca": "insoluble", "Sr": "insoluble", "Ba": "insoluble", "Pb": "insoluble", "Ag": "insoluble"},
-    # Перманганаты
-    "MnO4": {"NH4": "soluble", "alkali": "soluble"},
 }
 
-# Щелочные металлы
-ALKALI_METALS = {"Li", "Na", "K", "Rb", "Cs", "Fr"}
-# Щёлочноземельные металлы
-ALKALINE_EARTH = {"Be", "Mg", "Ca", "Sr", "Ba", "Ra"}
+_LOCALIZED_ORDER = ("en", "ru", "uk", "es")
+
+
+class InorgError(Exception):
+    """Error carrying a translation key and its formatting arguments."""
+
+    def __init__(self, key: str, **kwargs: Any):
+        super().__init__(key)
+        self.key = key
+        self.kwargs = kwargs
+
+
+def _detail(exc: Exception, lang: str) -> str:
+    """Resolve an exception to a localized HTTP error detail."""
+    if isinstance(exc, InorgError):
+        return get_text(exc.key, lang, **exc.kwargs)
+    return str(exc)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Вспомогательные функции
+# Formulas and elements
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _get_json(url: str, timeout: int = 10) -> dict:
-    """Выполняет HTTP GET запрос с поддержкой SOCKS5 прокси."""
-    import socks
-    from sockshandler import SocksiPyHandler
+_SINGLE_ION = re.compile(r"^([A-Z][a-z]?)(\d*)([+-])$")
+_ELEMENT_TOKEN = re.compile(r"(\d+)([spdf])(\d*)")
 
-    for attempt_proxy in [True, False]:
-        try:
-            if attempt_proxy and PROXY_ADDRESS.strip():
-                proxy_host, proxy_port = PROXY_ADDRESS.split(":")
-                proxy_handler = SocksiPyHandler(socks.SOCKS5, proxy_host, int(proxy_port))
-                opener = urllib.request.build_opener(proxy_handler)
-            else:
-                opener = urllib.request.build_opener()
+_NOBLE_CORES = {
+    "He": "1s2",
+    "Ne": "1s2 2s2 2p6",
+    "Ar": "1s2 2s2 2p6 3s2 3p6",
+    "Kr": "1s2 2s2 2p6 3s2 3p6 4s2 3d10 4p6",
+    "Xe": "1s2 2s2 2p6 3s2 3p6 4s2 3d10 4p6 5s2 4d10 5p6",
+    "Rn": "1s2 2s2 2p6 3s2 3p6 4s2 3d10 4p6 5s2 4d10 5p6 6s2 4f14 5d10 6p6",
+}
+_CORE_ELECTRONS = {"He": 2, "Ne": 10, "Ar": 18, "Kr": 36, "Xe": 54, "Rn": 86}
 
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with opener.open(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except Exception:
-            if attempt_proxy:
-                continue
-            raise
 
-    raise HTTPException(status_code=502, detail="External API unavailable")
+def _normalize_formula(formula: str) -> str:
+    """Normalize a formula to the form understood by molmass."""
+    text = formula.strip().replace(" ", "").replace("·", ".").replace("*", ".").replace("−", "-")
+    match = _SINGLE_ION.match(text)
+    if match:
+        element, digits, sign = match.groups()
+        charge = int(digits or 1)
+        text = f"[{element}]{'' if charge == 1 else charge}{sign}"
+    return text
+
+
+@lru_cache(maxsize=512)
+def _formula_data(formula: str) -> Dict[str, Any]:
+    """Parse a formula with molmass and return composition, charge and mass."""
+    text = _normalize_formula(formula)
+    try:
+        parsed = _MolFormula(text)
+    except Exception as exc:
+        raise InorgError("inorg_invalid_formula", formula=formula) from exc
+
+    elements = {
+        element: atom.count
+        for element, atom in parsed.composition().items()
+        if element != "e-" and atom.count
+    }
+    if not elements:
+        raise InorgError("inorg_cannot_parse_formula", formula=formula)
+
+    for element in elements:
+        _element_data(element)  # verify that the symbol is known
+
+    molar_mass = sum(_element_data(el)["atomic_mass"] * n for el, n in elements.items())
+    return {
+        "formula": parsed.formula,
+        "elements": elements,
+        "charge": int(round(parsed.charge)),
+        "molar_mass": float(molar_mass),
+    }
 
 
 def _parse_formula(formula: str) -> Dict[str, int]:
-    """
-    Парсит химическую формулу и возвращает словарь {элемент: количество}.
-    Поддерживает скобки и коэффициенты.
-    """
-    formula = formula.replace(" ", "")
-    if not formula or re.search(r"[^A-Za-z0-9()]", formula) or formula.count("(") != formula.count(")"):
-        raise ValueError(f"Некорректная формула: {formula!r}")
-    tokens = re.findall(r'([A-Z][a-z]?)(\d*)|(\()|(\))(\d*)', formula)
-    stack = [{}]
-    for elem, count, open_paren, close_paren, close_count in tokens:
-        if elem:
-            n = int(count) if count else 1
-            stack[-1][elem] = stack[-1].get(elem, 0) + n
-        elif open_paren:
-            stack.append({})
-        elif close_paren:
-            n = int(close_count) if close_count else 1
-            top = stack.pop()
-            for e, c in top.items():
-                stack[-1][e] = stack[-1].get(e, 0) + c * n
-    return stack[0]
+    """Elemental composition of a formula: {element: count}."""
+    return dict(_formula_data(formula)["elements"])
 
 
-def _get_element_info(symbol: str) -> dict:
-    """Получает информацию об элементе из PubChem PUG REST API."""
+def _parse_oxistates(text: str) -> List[Tuple[int, float]]:
+    """Parse a molmass string such as ``6, 3*, 2, 0`` into (state, cost) pairs."""
+    result: List[Tuple[int, float]] = []
+    for token in (text or "").split(","):
+        token = token.strip()
+        if not token:
+            continue
+        common = token.endswith("*")
+        token = token.rstrip("*")
+        if not token:
+            continue
+        try:
+            value = int(token)
+        except ValueError:
+            continue
+        result.append((value, 0.0 if common else 0.5))
+    return result
+
+
+def _econf_core(econf: str) -> Optional[str]:
+    match = re.match(r"\s*\[([A-Za-z]+)\]", econf or "")
+    return match.group(1) if match else None
+
+
+def _parse_econf_tokens(text: str) -> List[Tuple[int, str, int]]:
+    return [
+        (int(n), letter, int(count) if count else 1)
+        for n, letter, count in _ELEMENT_TOKEN.findall(text or "")
+    ]
+
+
+def _expand_econf(econf: str) -> List[Tuple[int, str, int]]:
+    text = econf or ""
+    core = _econf_core(text)
+    result: List[Tuple[int, str, int]] = []
+    if core:
+        result.extend(_parse_econf_tokens(_NOBLE_CORES.get(core, "")))
+        text = re.sub(r"^\s*\[[A-Za-z]+\]\s*", "", text)
+    result.extend(_parse_econf_tokens(text))
+    return result
+
+
+def _format_econf(econf: str) -> str:
+    text = (econf or "").strip()
+    core = _econf_core(text)
+    rest = re.sub(r"^\s*\[[A-Za-z]+\]\s*", "", text)
+    tokens = [f"{n}{letter}{count or 1}" for n, letter, count in _ELEMENT_TOKEN.findall(rest)]
+    if core:
+        return f"[{core}] " + " ".join(tokens) if tokens else f"[{core}]"
+    return " ".join(tokens)
+
+
+def _format_full_econf(econf: str) -> str:
+    return " ".join(f"{n}{letter}{count}" for n, letter, count in _expand_econf(econf))
+
+
+def _count_unpaired(config: List[Tuple[int, str, int]]) -> int:
+    capacity = {"s": 1, "p": 3, "d": 5, "f": 7}
+    unpaired = 0
+    for _, letter, electrons in config:
+        orbitals = capacity[letter]
+        unpaired += electrons if electrons <= orbitals else 2 * orbitals - electrons
+    return unpaired
+
+
+@lru_cache(maxsize=128)
+def _element_data(symbol: str) -> Dict[str, Any]:
+    """Element data from molmass, with a small fallback for superheavy elements."""
+    symbol = symbol.strip()
+    if symbol and symbol[0].islower():
+        symbol = symbol[0].upper() + symbol[1:]
+
     try:
-        url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/element/symbol/{symbol}/JSON"
-        data = _get_json(url)
-        if "Table" in data and "Row" in data["Table"]:
-            row = data["Table"]["Row"][0]
-            return {
-                "symbol": symbol,
-                "atomic_number": row.get("Cell", [None])[0],
-                "atomic_mass": row.get("Cell", [None, None])[1],
-            }
-    except Exception:
-        pass
-    # Fallback на локальные данные
+        element = _ELEMENTS[symbol]
+    except KeyError:
+        element = None
+
+    if element is not None:
+        oxidation = _parse_oxistates(element.oxistates) or [(0, 0.0)]
+        return {
+            "symbol": element.symbol,
+            "name": element.name,
+            "atomic_number": element.number,
+            "atomic_mass": element.mass,
+            "electronegativity": element.eleneg or None,
+            "group": element.group,
+            "period": element.period,
+            "block": element.block,
+            "electron_configuration": _format_econf(element.eleconfig),
+            "full_configuration": _format_full_econf(element.eleconfig),
+            "expanded_configuration": _expand_econf(element.eleconfig),
+            "noble_gas_core": _econf_core(element.eleconfig),
+            "oxidation_states": oxidation,
+        }
+
+    fallback = _SUPERHEAVY.get(symbol)
+    if not fallback:
+        raise InorgError("inorg_unknown_element", element=symbol)
+
+    number, mass, econf, oxistates = fallback
     return {
         "symbol": symbol,
-        "atomic_number": None,
-        "atomic_mass": ATOMIC_MASSES.get(symbol),
+        "name": symbol,
+        "atomic_number": number,
+        "atomic_mass": mass,
+        "electronegativity": None,
+        "group": None,
+        "period": 7,
+        "block": "d",
+        "electron_configuration": _format_econf(econf),
+        "full_configuration": _format_full_econf(econf),
+        "expanded_configuration": _expand_econf(econf),
+        "noble_gas_core": _econf_core(econf),
+        "oxidation_states": _parse_oxistates(oxistates) or [(0, 0.0)],
+    }
+
+
+def _is_metal(symbol: str) -> bool:
+    data = _element_data(symbol)
+    return (
+        data["block"] in ("d", "f")
+        or symbol in ALKALI_METALS
+        or symbol in ALKALINE_EARTH
+        or symbol in {"Al", "Ga", "In", "Sn", "Tl", "Pb", "Bi", "Po"}
+    )
+
+
+def _is_transition_metal(symbol: str) -> bool:
+    return _element_data(symbol)["block"] == "d"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Oxidation states
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _num(value: Fraction) -> Any:
+    value = Fraction(value)
+    return int(value) if value.denominator == 1 else round(float(value), 4)
+
+
+def _oxidation_candidates(symbol: str) -> List[Tuple[Fraction, float]]:
+    """Oxidation-state candidates sorted by how common they are."""
+    data = _element_data(symbol)
+    candidates = [(Fraction(value), cost) for value, cost in data["oxidation_states"]]
+    candidates.extend((Fraction(value), cost) for value, cost in _EXTRA_OX.get(symbol, []))
+
+    best: Dict[Fraction, float] = {}
+    for value, cost in candidates:
+        if value not in best or cost < best[value]:
+            best[value] = cost
+    return sorted(best.items(), key=lambda item: (item[1], abs(item[0])))[:12]
+
+
+def _state_options(
+    symbol: str,
+    count: int,
+    candidates: List[Tuple[Fraction, float]],
+    fixed: Optional[Fraction],
+    mixing_penalty: float = 0.4,
+) -> List[Tuple[Fraction, float, Tuple[Tuple[Fraction, int], ...]]]:
+    """Ways to distribute ``count`` atoms of an element over its states."""
+    if fixed is not None:
+        return [(fixed * count, 0.0, ((fixed, count),))]
+
+    best: Dict[Fraction, Tuple[float, Tuple[Tuple[Fraction, int], ...]]] = {}
+
+    def add(contribution: Fraction, cost: float, assignment: Tuple[Tuple[Fraction, int], ...]) -> None:
+        if contribution not in best or cost < best[contribution][0]:
+            best[contribution] = (cost, assignment)
+
+    for state, cost in candidates:
+        add(state * count, cost * count, ((state, count),))
+
+    if count > 1:
+        splits = range(1, count) if count <= 20 else {1, count // 2, count - 1}
+        for index, (state1, cost1) in enumerate(candidates):
+            for state2, cost2 in candidates[index + 1:]:
+                for split in splits:
+                    contribution = state1 * split + state2 * (count - split)
+                    cost = cost1 * split + cost2 * (count - split) + mixing_penalty
+                    assignment = tuple(
+                        sorted(
+                            ((state1, split), (state2, count - split)),
+                            key=lambda item: (-item[1], item[0]),
+                        )
+                    )
+                    add(contribution, cost, assignment)
+
+    return [(charge, value[0], value[1]) for charge, value in best.items()]
+
+
+def _format_oxidation_result(assignment: Dict[str, Tuple[Tuple[Fraction, int], ...]]) -> Dict[str, Any]:
+    oxidation_states: Dict[str, Any] = {}
+    detail: Dict[str, List[Dict[str, Any]]] = {}
+    mixed: List[str] = []
+
+    for element, states in assignment.items():
+        total = sum(count for _, count in states)
+        average = sum(state * count for state, count in states) / total
+        oxidation_states[element] = _num(average)
+        detail[element] = [
+            {
+                "state": _num(state),
+                "count": count,
+                "percent": round(count / total * 100, 2),
+            }
+            for state, count in states
+        ]
+        if len(states) > 1:
+            mixed.append(element)
+
+    return {
+        "oxidation_states": oxidation_states,
+        "oxidation_states_detail": detail,
+        "mixed_valence": mixed,
+    }
+
+
+def _solve_oxidation_states(elements: Dict[str, int], charge: int = 0) -> Dict[str, Any]:
+    """
+    Universal oxidation-state solver based on composition and charge.
+
+    Handles carbonyls, cyanides, sulfates, nitrogen oxides, peroxides and
+    mixed valence without compound-specific branches.
+    """
+    elements = {element: int(count) for element, count in elements.items() if count}
+    if not elements:
+        raise InorgError("inorg_empty_formula")
+    if len(elements) == 1:
+        element, count = next(iter(elements.items()))
+        state = Fraction(charge, count)
+        return _format_oxidation_result({element: ((state, count),)})
+
+    fixed: Dict[str, Fraction] = {}
+
+    # Binary nitrogen oxides: N2O (+1), NO (+2), N2O3 (+3), NO2 (+4), N2O5 (+5).
+    if set(elements) <= {"N", "O"} and "N" in elements and "O" in elements:
+        fixed["O"] = Fraction(-2)
+        fixed["N"] = Fraction(-2 * elements["O"] + charge, elements["N"])
+        return _format_oxidation_result(
+            {element: ((fixed[element], count),) for element, count in elements.items()}
+        )
+
+    # Sulfates and persulfates: S:O = 1:4.
+    if elements.get("S", 0) > 0 and elements.get("O", 0) == 4 * elements["S"]:
+        fixed["S"] = Fraction(6)
+
+    # Metal carbonyls: CO is a neutral ligand, C(+2), O(-2).
+    if (
+        elements.get("C", 0)
+        and elements.get("C", 0) == elements.get("O", 0)
+        and not elements.get("H", 0)
+        and any(_is_transition_metal(element) for element in elements)
+    ):
+        fixed["C"] = Fraction(2)
+        fixed["O"] = Fraction(-2)
+
+    # Metal cyanides: CN is C(+2), N(-3).
+    if (
+        elements.get("C", 0)
+        and elements.get("C", 0) == elements.get("N", 0)
+        and not elements.get("H", 0)
+        and not elements.get("O", 0)
+        and any(_is_transition_metal(element) for element in elements)
+    ):
+        fixed["C"] = Fraction(2)
+        fixed["N"] = Fraction(-3)
+
+    organic = "C" in elements and "H" in elements and not any(_is_metal(el) for el in elements)
+
+    candidates: Dict[str, List[Tuple[Fraction, float]]] = {}
+    for element in elements:
+        if element in fixed:
+            continue
+        if organic and element == "C":
+            candidates[element] = [
+                (Fraction(-3), 0.2),
+                (Fraction(-2), 0.3),
+                (Fraction(-1), 0.4),
+                (Fraction(0), 1.0),
+                (Fraction(1), 0.6),
+                (Fraction(2), 0.4),
+                (Fraction(3), 0.2),
+                (Fraction(4), 0.5),
+                (Fraction(-4), 0.5),
+            ]
+        else:
+            candidates[element] = _oxidation_candidates(element)
+
+    # Dynamic programming over charge. State: charge -> (cost, assignment).
+    dp: Dict[Fraction, Tuple[float, Dict[str, Tuple[Tuple[Fraction, int], ...]]]] = {
+        Fraction(0): (0.0, {})
+    }
+    for element, count in elements.items():
+        options = _state_options(element, count, candidates.get(element, []), fixed.get(element))
+        new_dp: Dict[Fraction, Tuple[float, Dict[str, Tuple[Tuple[Fraction, int], ...]]]] = {}
+        for current_charge, (current_cost, assignment) in dp.items():
+            for delta, cost, states in options:
+                new_charge = current_charge + delta
+                new_cost = current_cost + cost
+                if new_charge not in new_dp or new_cost < new_dp[new_charge][0]:
+                    new_dp[new_charge] = (new_cost, {**assignment, element: states})
+        dp = new_dp
+        if len(dp) > 5000:
+            dp = dict(sorted(dp.items(), key=lambda item: item[1][0])[:5000])
+
+    target = Fraction(charge)
+    if target in dp:
+        return _format_oxidation_result(dp[target][1])
+
+    raise InorgError("inorg_cannot_determine_oxidation", elements=", ".join(sorted(elements)))
+
+
+def _oxidation_from_smiles(smiles: str) -> Dict[str, Any]:
+    """Compute oxidation states from molecular structure with RDKit."""
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        raise InorgError("invalid_smiles")
+
+    rdMolDescriptors.CalcOxidationNumbers(mol)
+    grouped: Dict[str, List[int]] = {}
+    for atom in mol.GetAtoms():
+        value = atom.GetPropsAsDict().get("OxidationNumber")
+        if value is None:
+            continue
+        grouped.setdefault(atom.GetSymbol(), []).append(int(value))
+
+    assignment: Dict[str, Tuple[Tuple[Fraction, int], ...]] = {}
+    for element, values in grouped.items():
+        counts: Dict[int, int] = {}
+        for value in values:
+            counts[value] = counts.get(value, 0) + 1
+        assignment[element] = tuple(
+            (Fraction(state), count)
+            for state, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        )
+
+    result = _format_oxidation_result(assignment)
+    result["formula"] = rdMolDescriptors.CalcMolFormula(mol)
+    result["smiles"] = smiles
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reactions
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _split_coefficient(term: str) -> Tuple[int, str]:
+    match = re.match(r"^(\d+)\s*(.+)$", term.strip())
+    if match:
+        return int(match.group(1)), match.group(2).strip()
+    return 1, term.strip()
+
+
+def _parse_reaction_side(side: str) -> List[Dict[str, Any]]:
+    parts = [part.strip() for part in re.split(r"\s+\+\s+", side) if part.strip()]
+    if len(parts) <= 1:
+        parts = [part.strip() for part in side.split("+") if part.strip()]
+
+    terms = []
+    for part in parts:
+        coefficient, formula = _split_coefficient(part)
+        data = _formula_data(formula)
+        terms.append(
+            {
+                **data,
+                "formula": formula,
+                "normalized_formula": data["formula"],
+                "coeff": coefficient,
+            }
+        )
+    return terms
+
+
+def _parse_reaction(reaction: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    for arrow in ("->", "→", "="):
+        if arrow in reaction:
+            left, right = reaction.split(arrow, 1)
+            return _parse_reaction_side(left), _parse_reaction_side(right)
+    raise InorgError("inorg_reaction_format")
+
+
+def _balance_reaction(
+    left_terms: List[Dict[str, Any]], right_terms: List[Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+    """Balance a reaction via the null space of the composition and charge matrix."""
+    count_left = len(left_terms)
+    total = count_left + len(right_terms)
+    if total < 2:
+        return None
+
+    elements = set()
+    for term in left_terms + right_terms:
+        elements.update(term["elements"])
+
+    rows = []
+    for element in sorted(elements):
+        rows.append(
+            [Fraction(term["elements"].get(element, 0)) for term in left_terms]
+            + [Fraction(-term["elements"].get(element, 0)) for term in right_terms]
+        )
+    rows.append(
+        [Fraction(term["charge"]) for term in left_terms]
+        + [Fraction(-term["charge"]) for term in right_terms]
+    )
+
+    pivots: List[int] = []
+    row_index = 0
+    for column in range(total):
+        pivot = next((i for i in range(row_index, len(rows)) if rows[i][column] != 0), None)
+        if pivot is None:
+            continue
+        rows[row_index], rows[pivot] = rows[pivot], rows[row_index]
+        pivot_value = rows[row_index][column]
+        rows[row_index] = [value / pivot_value for value in rows[row_index]]
+        for i in range(len(rows)):
+            if i != row_index and rows[i][column] != 0:
+                factor = rows[i][column]
+                rows[i] = [a - factor * b for a, b in zip(rows[i], rows[row_index])]
+        pivots.append(column)
+        row_index += 1
+        if row_index == len(rows):
+            break
+
+    free = [column for column in range(total) if column not in pivots]
+    if len(free) != 1:
+        return None
+
+    solution = [Fraction(0)] * total
+    solution[free[0]] = Fraction(1)
+    for index, column in enumerate(pivots):
+        solution[column] = -rows[index][free[0]]
+    if any(value <= 0 for value in solution):
+        return None
+
+    multiplier = reduce(lambda a, b: a * b // gcd(a, b), (value.denominator for value in solution))
+    coefficients = [int(value * multiplier) for value in solution]
+    common = reduce(gcd, coefficients)
+    coefficients = [value // common for value in coefficients]
+
+    def render(coefficient: int, formula: str) -> str:
+        return formula if coefficient == 1 else f"{coefficient}{formula}"
+
+    left_text = " + ".join(
+        render(coefficients[i], term["formula"]) for i, term in enumerate(left_terms)
+    )
+    right_text = " + ".join(
+        render(coefficients[count_left + i], term["formula"]) for i, term in enumerate(right_terms)
+    )
+    return {
+        "equation": f"{left_text} -> {right_text}",
+        "coefficients": coefficients,
+    }
+
+
+def _reaction_agents(
+    left_terms: List[Dict[str, Any]],
+    right_terms: List[Dict[str, Any]],
+    coefficients: List[int],
+) -> Dict[str, Any]:
+    """Determine the oxidizing/reducing agent from oxidation-state changes."""
+    count_left = len(left_terms)
+    for index, term in enumerate(left_terms + right_terms):
+        term["coeff"] = coefficients[index]
+
+    states: Dict[int, Dict[str, Any]] = {}
+    for index, term in enumerate(left_terms + right_terms):
+        try:
+            result = _solve_oxidation_states(term["elements"], term["charge"])
+            states[index] = result["oxidation_states"]
+        except InorgError:
+            states[index] = {}
+
+    elements = set()
+    for term in left_terms + right_terms:
+        elements.update(term["elements"])
+
+    transfers = []
+    oxidizing = []
+    reducing = []
+
+    for element in sorted(elements):
+        left_total = 0.0
+        left_atoms = 0
+        right_total = 0.0
+        right_atoms = 0
+        for index, term in enumerate(left_terms):
+            amount = term["elements"].get(element, 0)
+            if amount and element in states.get(index, {}):
+                left_total += term["coeff"] * amount * float(states[index][element])
+                left_atoms += term["coeff"] * amount
+        for index, term in enumerate(right_terms):
+            global_index = count_left + index
+            amount = term["elements"].get(element, 0)
+            if amount and element in states.get(global_index, {}):
+                right_total += term["coeff"] * amount * float(states[global_index][element])
+                right_atoms += term["coeff"] * amount
+
+        if not left_atoms or not right_atoms:
+            continue
+
+        delta = right_total - left_total
+        if abs(delta) < 1e-6:
+            continue
+
+        direction = "oxidized" if delta > 0 else "reduced"
+        transfers.append(
+            {
+                "element": element,
+                "direction": direction,
+                "from_state": round(left_total / left_atoms, 3),
+                "to_state": round(right_total / right_atoms, 3),
+                "electrons": round(abs(delta), 4),
+            }
+        )
+
+        targets = oxidizing if delta < 0 else reducing
+        for term in left_terms:
+            if element in term["elements"] and term["formula"] not in targets:
+                targets.append(term["formula"])
+
+    return {
+        "oxidizing_agent": ", ".join(oxidizing) or None,
+        "reducing_agent": ", ".join(reducing) or None,
+        "electron_transfer": transfers,
     }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Эндпоинты
+# Endpoints
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/", include_in_schema=False)
 async def inorg_index(lang: str = Depends(get_lang)):
-    """Индексная страница Inorganic Chemistry API."""
+    """Inorganic Chemistry API index page."""
     return {
         "endpoints": {
-            "GET /inorg/api/parse_formula": "Парсинг химической формулы",
-            "GET /inorg/api/moles": "Расчёт молей и массы",
-            "GET /inorg/api/electronegativity": "Электроотрицательность и тип связи",
-            "GET /inorg/api/oxidation_states": "Степени окисления",
-            "GET /inorg/api/solubility": "Проверка растворимости",
-            "GET /inorg/api/redox": "Окислительно-восстановительные реакции",
-            "GET /inorg/api/stoichiometry": "Стехиометрия реакции",
-            "GET /inorg/api/orbitals": "Электронная конфигурация и орбитали",
-            "GET /inorg/api/element_info": "Информация об элементе",
+            "GET /inorg/api/parse_formula": get_text("inorg_ep_parse_formula", lang),
+            "GET /inorg/api/moles": get_text("inorg_ep_moles", lang),
+            "GET /inorg/api/electronegativity": get_text("inorg_ep_electronegativity", lang),
+            "GET /inorg/api/oxidation_states": get_text("inorg_ep_oxidation_states", lang),
+            "GET /inorg/api/solubility": get_text("inorg_ep_solubility", lang),
+            "GET /inorg/api/redox": get_text("inorg_ep_redox", lang),
+            "GET /inorg/api/stoichiometry": get_text("inorg_ep_stoichiometry", lang),
+            "GET /inorg/api/orbitals": get_text("inorg_ep_orbitals", lang),
+            "GET /inorg/api/element_info": get_text("inorg_ep_element_info", lang),
         }
     }
 
 
-@router.get("/parse_formula", summary="Парсинг химической формулы")
+@router.get(
+    "/parse_formula",
+    summary=get_text("inorg_ep_parse_formula"),
+    description=get_text("inorg_desc_parse_formula"),
+)
 def parse_formula(
-    formula: str = Query(..., description="Химическая формула, например H2SO4"),
+    formula: str = Query(..., description=get_text("inorg_param_formula")),
     lang: str = Depends(get_lang),
 ):
     """
-    Парсит химическую формулу и возвращает:
-    - Список элементов с количествами
-    - Молекулярную массу
-    - Массовые доли элементов
+    Parse a chemical formula and return elements, charge, molar mass and the
+    mass fractions of the elements. Hydrates (CuSO4·5H2O) and complex ions
+    ([Fe(CN)6]4-) are supported.
     """
     try:
-        elements = _parse_formula(formula)
-        if not elements:
-            raise ValueError("Не удалось разобрать формулу")
+        data = _formula_data(formula)
+        elements = data["elements"]
+        total_mass = data["molar_mass"]
 
-        # Вычисляем молекулярную массу
-        total_mass = 0.0
         element_details = []
-        for elem, count in elements.items():
-            mass = ATOMIC_MASSES.get(elem)
-            if mass is None:
-                raise ValueError(f"Неизвестный элемент: {elem}")
-            total_mass += mass * count
-            element_details.append({
-                "element": elem,
-                "count": count,
-                "atomic_mass": mass,
-                "total_mass": round(mass * count, 4),
-            })
-
-        # Массовые доли
-        for ed in element_details:
-            ed["mass_percent"] = round(ed["total_mass"] / total_mass * 100, 2)
+        for element, count in elements.items():
+            atomic_mass = _element_data(element)["atomic_mass"]
+            element_mass = atomic_mass * count
+            element_details.append(
+                {
+                    "element": element,
+                    "count": count,
+                    "atomic_mass": round(atomic_mass, 6),
+                    "total_mass": round(element_mass, 6),
+                    "mass_percent": round(element_mass / total_mass * 100, 2) if total_mass else 0.0,
+                }
+            )
 
         return {
             "formula": formula,
+            "normalized_formula": data["formula"],
+            "charge": data["charge"],
             "elements": element_details,
             "molecular_mass": round(total_mass, 4),
             "total_atoms": sum(elements.values()),
         }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=_detail(exc, lang)) from exc
 
 
-@router.get("/moles", summary="Расчёт молей и массы")
+@router.get(
+    "/moles",
+    summary=get_text("inorg_ep_moles"),
+    description=get_text("inorg_desc_moles"),
+)
 def calculate_moles(
-    formula: str = Query(..., description="Химическая формула"),
-    mass: float = Query(..., description="Масса в граммах", gt=0),
+    formula: str = Query(..., description=get_text("inorg_param_formula_short")),
+    mass: float = Query(..., description=get_text("inorg_param_mass"), gt=0),
     lang: str = Depends(get_lang),
 ):
-    """
-    Рассчитывает:
-    - Количество молей по массе
-    - Массу по количеству молей
-    - Число молекул (число Авогадро)
-    """
+    """Calculate moles, number of molecules and atoms from a mass."""
     try:
-        elements = _parse_formula(formula)
-        if not elements:
-            raise ValueError("Не удалось разобрать формулу")
+        data = _formula_data(formula)
+        molar_mass = data["molar_mass"]
+        if molar_mass <= 0:
+            raise InorgError("inorg_molar_mass_failed")
 
-        # Молекулярная масса
-        total_mass = sum(ATOMIC_MASSES.get(elem, 0) * count for elem, count in elements.items())
-        if total_mass == 0:
-            raise ValueError("Не удалось вычислить молекулярную массу")
-
-        moles = mass / total_mass
-        avogadro = 6.02214076e23
-        molecules = moles * avogadro
-
+        moles = mass / molar_mass
         return {
             "formula": formula,
             "mass_g": mass,
-            "molecular_mass": round(total_mass, 4),
+            "molecular_mass": round(molar_mass, 4),
             "moles": round(moles, 6),
-            "molecules": molecules,
-            "atoms": sum(elements.values()),
+            "molecules": moles * 6.02214076e23,
+            "atoms": sum(data["elements"].values()),
         }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=_detail(exc, lang)) from exc
 
 
-@router.get("/electronegativity", summary="Электроотрицательность и тип связи")
+@router.get(
+    "/electronegativity",
+    summary=get_text("inorg_ep_electronegativity"),
+    description=get_text("inorg_desc_electronegativity"),
+)
 def get_electronegativity(
-    element1: str = Query(..., description="Первый элемент (например, Na)"),
-    element2: str = Query(..., description="Второй элемент (например, Cl)"),
+    element1: str = Query(..., description=get_text("inorg_param_element1")),
+    element2: str = Query(..., description=get_text("inorg_param_element2")),
     lang: str = Depends(get_lang),
 ):
     """
-    Определяет тип связи между двумя элементами по разнице электроотрицательностей:
-    - ΔEN < 0.5: неполярная ковалентная
-    - 0.5 ≤ ΔEN < 1.7: полярная ковалентная
-    - ΔEN ≥ 1.7: ионная
+    Determine the bond type from the Pauling electronegativity difference:
+    ΔEN < 0.5 — nonpolar covalent, 0.5–1.7 — polar covalent, ≥ 1.7 — ionic.
     """
     try:
-        en1 = ELECTRONEGATIVITY.get(element1)
-        en2 = ELECTRONEGATIVITY.get(element2)
-
+        en1 = _element_data(element1)["electronegativity"]
+        en2 = _element_data(element2)["electronegativity"]
         if en1 is None or en2 is None:
-            raise ValueError(f"Неизвестный элемент: {element1 if en1 is None else element2}")
-        if en1 == 0 or en2 == 0:
-            raise ValueError("Для благородных газов электроотрицательность не определена")
+            raise InorgError("inorg_electronegativity_missing")
 
         delta = abs(en1 - en2)
-
         if delta < 0.5:
             bond_type = "nonpolar_covalent"
-            bond_type_ru = "неполярная ковалентная"
         elif delta < 1.7:
             bond_type = "polar_covalent"
-            bond_type_ru = "полярная ковалентная"
         else:
             bond_type = "ionic"
-            bond_type_ru = "ионная"
 
         return {
             "element1": element1,
@@ -338,647 +814,348 @@ def get_electronegativity(
             "electronegativity2": en2,
             "delta": round(delta, 2),
             "bond_type": bond_type,
-            "bond_type_ru": bond_type_ru,
+            "bond_type_text": get_text(f"bond_{bond_type}", lang),
+            **{
+                f"bond_type_{code}": get_text(f"bond_{bond_type}", code)
+                for code in _LOCALIZED_ORDER
+            },
         }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=_detail(exc, lang)) from exc
 
 
-@router.get("/oxidation_states", summary="Степени окисления")
+@router.get(
+    "/oxidation_states",
+    summary=get_text("inorg_ep_oxidation_states"),
+    description=get_text("inorg_desc_oxidation_states"),
+)
 def get_oxidation_states(
-    formula: str = Query(..., description="Химическая формула, например Fe2O3"),
+    formula: Optional[str] = Query(None, description=get_text("inorg_param_formula_example")),
+    smiles: Optional[str] = Query(None, description=get_text("inorg_param_smiles")),
     lang: str = Depends(get_lang),
 ):
     """
-    Определяет степени окисления элементов в соединении с учетом баланса зарядов и особых случаев.
+    Determine the oxidation states of the elements.
+
+    When ``smiles`` is provided, RDKit computes the states from molecular
+    structure. For a formula, a universal charge-balance solver accounts for
+    carbonyls, cyanides, sulfates, peroxides and mixed valence.
     """
     try:
-        elements = _parse_formula(formula)
-        if not elements:
-            raise ValueError("Не удалось разобрать формулу")
+        if smiles:
+            return _oxidation_from_smiles(smiles)
+        if not formula:
+            raise InorgError("inorg_specify_formula_or_smiles")
 
-        oxidation = {}
-        remaining = dict(elements)
-        normalized_formula = formula.replace(" ", "").lower()
-
-        if normalized_formula in ("h2o2", "na2o2", "bao2", "k2o2"):
-            if "H" in remaining:
-                oxidation["H"] = 1
-                del remaining["H"]
-            if "Na" in remaining:
-                oxidation["Na"] = 1
-                del remaining["Na"]
-            if "K" in remaining:
-                oxidation["K"] = 1
-                del remaining["K"]
-            if "Ba" in remaining:
-                oxidation["Ba"] = 2
-                del remaining["Ba"]
-            if "O" in remaining:
-                oxidation["O"] = -1
-                del remaining["O"]
-        elif "ni(co)" in normalized_formula or normalized_formula == "ni(co)4":
-            oxidation["Ni"] = 0
-            oxidation["C"] = 2
-            oxidation["O"] = -2
-            remaining.clear()
-        else:
-            if "F" in remaining:
-                oxidation["F"] = -1
-                del remaining["F"]
-
-            for elem in list(remaining.keys()):
-                if elem in ALKALI_METALS:
-                    oxidation[elem] = 1
-                    del remaining[elem]
-
-            for elem in list(remaining.keys()):
-                if elem in ALKALINE_EARTH:
-                    oxidation[elem] = 2
-                    del remaining[elem]
-
-            if "H" in remaining:
-                oxidation["H"] = -1 if all(e in ALKALI_METALS | ALKALINE_EARTH for e in remaining if e != "H") else 1
-                del remaining["H"]
-
-            if "O" in remaining:
-                oxidation["O"] = -2
-                del remaining["O"]
-
-        if remaining:
-            known_sum = sum(oxidation.get(elem, 0) * elements.get(elem, 0) for elem in oxidation)
-            if len(remaining) == 1:
-                elem = list(remaining.keys())[0]
-                count = remaining[elem]
-                if count > 0:
-                    oxidation[elem] = -known_sum // count
-            else:
-                for elem in remaining:
-                    typical = OXIDATION_STATES.get(elem, [0])
-                    oxidation[elem] = typical[0] if typical else 0
-
-        return {
-            "formula": formula,
-            "oxidation_states": oxidation,
-            "elements": elements,
-        }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        data = _formula_data(formula)
+        result = _solve_oxidation_states(data["elements"], data["charge"])
+        result.update(
+            {
+                "formula": formula,
+                "normalized_formula": data["formula"],
+                "charge": data["charge"],
+                "elements": data["elements"],
+            }
+        )
+        return result
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=_detail(exc, lang)) from exc
 
 
-@router.get("/solubility", summary="Проверка растворимости")
+def _solubility_response(
+    cation_name: str,
+    anion_name: str,
+    solubility: str,
+    rule_key: str,
+    lang: str,
+    **rule_kwargs: Any,
+) -> Dict[str, Any]:
+    """Build a localized solubility response for all supported languages."""
+    text_key = f"solubility_{solubility}"
+    response: Dict[str, Any] = {
+        "compound": f"{cation_name}{anion_name}",
+        "solubility": solubility,
+        "solubility_text": get_text(text_key, lang),
+        "rule": get_text(rule_key, lang, **rule_kwargs),
+        "rule_key": rule_key,
+    }
+    for code in _LOCALIZED_ORDER:
+        response[f"solubility_{code}"] = get_text(text_key, code)
+        response[f"rule_{code}"] = get_text(rule_key, code, **rule_kwargs)
+    return response
+
+
+@router.get(
+    "/solubility",
+    summary=get_text("inorg_ep_solubility"),
+    description=get_text("inorg_desc_solubility"),
+)
 def check_solubility(
-    cation: str = Query(..., description="Катион (например, Na, Ca, Ag)"),
-    anion: str = Query(..., description="Анион (например, Cl, SO4, CO3)"),
+    cation: str = Query(..., description=get_text("inorg_param_cation")),
+    anion: str = Query(..., description=get_text("inorg_param_anion")),
     lang: str = Depends(get_lang),
 ):
     """
-    Проверяет растворимость соединения по таблице растворимости.
-    Возвращает: soluble (растворим), insoluble (нерастворим), slightly (малорастворим).
+    Check compound solubility against the solubility rules.
+    Returns soluble, insoluble, slightly or unknown.
     """
     try:
-        # Нитраты, ацетаты, хлораты, перхлораты всегда растворимы
         if anion in ("NO3", "CH3COO", "ClO3", "ClO4"):
-            return {
-                "compound": f"{cation}{anion}",
-                "solubility": "soluble",
-                "solubility_ru": "растворим",
-                "rule": "Все нитраты, ацетаты, хлораты и перхлораты растворимы",
-            }
+            return _solubility_response(
+                cation, anion, "soluble", "solubility_rule_nitrates", lang
+            )
 
-        # Хлориды, бромиды, иодиды
         if anion in ("Cl", "Br", "I"):
-            exceptions = SOLUBILITY_TABLE.get(anion, {})
-            if cation in exceptions:
-                sol = exceptions[cation]
-            else:
-                sol = "soluble"
-            return {
-                "compound": f"{cation}{anion}",
-                "solubility": sol,
-                "solubility_ru": {"soluble": "растворим", "insoluble": "нерастворим", "slightly": "малорастворим"}.get(sol, sol),
-                "rule": f"Исключение для {cation}" if cation in exceptions else "Все галогениды растворимы, кроме Ag, Pb, Hg2, Tl",
-                "rule_en": f"Exception for {cation}" if cation in exceptions else "All halides soluble except Ag, Pb, Hg2, Tl",
-                "rule_uk": f"Виняток для {cation}" if cation in exceptions else "Усі галогеніди розчинні, крім Ag, Pb, Hg2, Tl",
-                "rule_es": f"Excepción para {cation}" if cation in exceptions else "Todos los haluros solubles excepto Ag, Pb, Hg2, Tl",
-            }
+            exceptions = _SOLUBILITY_EXCEPTIONS.get(anion, {})
+            solubility = exceptions.get(cation, "soluble")
+            rule_key = (
+                "solubility_rule_exception"
+                if cation in exceptions
+                else "solubility_rule_halides"
+            )
+            return _solubility_response(
+                cation, anion, solubility, rule_key, lang, cation=cation
+            )
 
-        # Сульфаты
         if anion == "SO4":
-            exceptions = SOLUBILITY_TABLE.get("SO4", {})
-            if cation in exceptions:
-                sol = exceptions[cation]
-            else:
-                sol = "soluble"
-            return {
-                "compound": f"{cation}SO4",
-                "solubility": sol,
-                "solubility_ru": {"soluble": "растворим", "insoluble": "нерастворим", "slightly": "малорастворим"}.get(sol, sol),
-                "rule": f"Исключение для {cation}" if cation in exceptions else "Все сульфаты растворимы, кроме Ba, Pb, Sr, Ca(мал)",
-                "rule_en": f"Exception for {cation}" if cation in exceptions else "All sulfates soluble except Ba, Pb, Sr, Ca(slightly)",
-                "rule_uk": f"Виняток для {cation}" if cation in exceptions else "Усі сульфати розчинні, крім Ba, Pb, Sr, Ca(мала)",
-                "rule_es": f"Excepción para {cation}" if cation in exceptions else "Todos los sulfatos solubles excepto Ba, Pb, Sr, Ca(poco)",
-            }
+            exceptions = _SOLUBILITY_EXCEPTIONS.get("SO4", {})
+            solubility = exceptions.get(cation, "soluble")
+            rule_key = (
+                "solubility_rule_exception"
+                if cation in exceptions
+                else "solubility_rule_sulfates"
+            )
+            return _solubility_response(
+                cation, anion, solubility, rule_key, lang, cation=cation
+            )
 
-        # Сульфиды
         if anion == "S":
             if cation in ALKALI_METALS or cation == "NH4":
-                sol = "soluble"
+                solubility = "soluble"
             elif cation in ALKALINE_EARTH:
-                sol = "slightly"
+                solubility = "slightly"
             else:
-                sol = "insoluble"
-            return {
-                "compound": f"{cation}S",
-                "solubility": sol,
-                "solubility_ru": {"soluble": "растворим", "insoluble": "нерастворим", "slightly": "малорастворим"}.get(sol, sol),
-                "rule": "Сульфиды щелочных и щёлочноземельных металлов растворимы",
-                "rule_en": "Sulfides of alkali and alkaline earth metals are soluble",
-                "rule_uk": "Сульфіди лужних та лужноземельних металів розчинні",
-                "rule_es": "Sulfuros de metales alcalinos y alcalinotérreos son solubles",
-            }
+                solubility = "insoluble"
+            return _solubility_response(
+                cation, anion, solubility, "solubility_rule_sulfides", lang
+            )
 
-        # Карбонаты
-        if anion == "CO3":
+        if anion in ("CO3", "PO4", "C2O4"):
             if cation in ALKALI_METALS or cation == "NH4":
-                sol = "soluble"
+                solubility = "soluble"
             elif cation == "Mg":
-                sol = "slightly"
+                solubility = "slightly"
             else:
-                sol = "insoluble"
-            return {
-                "compound": f"{cation}CO3",
-                "solubility": sol,
-                "solubility_ru": {"soluble": "растворим", "insoluble": "нерастворим", "slightly": "малорастворим"}.get(sol, sol),
-                "rule": "Карбонаты щелочных металлов растворимы, остальные — нет",
-                "rule_en": "Carbonates of alkali metals are soluble, others are not",
-                "rule_uk": "Карбонати лужних металів розчинні, інші — ні",
-                "rule_es": "Carbonatos de metales alcalinos son solubles, otros no",
-            }
+                solubility = "insoluble"
+            return _solubility_response(
+                cation, anion, solubility, "solubility_rule_carbonates", lang
+            )
 
-        # Гидроксиды
         if anion == "OH":
-            if cation in ALKALI_METALS or cation == "NH4":
-                sol = "soluble"
-            elif cation in ("Ba", "Sr"):
-                sol = "soluble"
+            if cation in ALKALI_METALS or cation == "NH4" or cation in ("Ba", "Sr"):
+                solubility = "soluble"
             elif cation == "Ca":
-                sol = "slightly"
+                solubility = "slightly"
             else:
-                sol = "insoluble"
-            return {
-                "compound": f"{cation}OH",
-                "solubility": sol,
-                "solubility_ru": {"soluble": "растворим", "insoluble": "нерастворим", "slightly": "малорастворим"}.get(sol, sol),
-                "rule": "Гидроксиды щелочных металлов, Ba, Sr растворимы",
-                "rule_en": "Hydroxides of alkali metals, Ba, Sr are soluble",
-                "rule_uk": "Гідроксиди лужних металів, Ba, Sr розчинні",
-                "rule_es": "Hidróxidos de metales alcalinos, Ba, Sr son solubles",
-            }
+                solubility = "insoluble"
+            return _solubility_response(
+                cation, anion, solubility, "solubility_rule_hydroxides", lang
+            )
 
-        # Фосфаты
-        if anion == "PO4":
-            if cation in ALKALI_METALS or cation == "NH4":
-                sol = "soluble"
-            elif cation == "Mg":
-                sol = "slightly"
-            else:
-                sol = "insoluble"
-            return {
-                "compound": f"{cation}PO4",
-                "solubility": sol,
-                "solubility_ru": {"soluble": "растворим", "insoluble": "нерастворим", "slightly": "малорастворим"}.get(sol, sol),
-                "rule": "Фосфаты щелочных металлов растворимы",
-                "rule_en": "Phosphates of alkali metals are soluble",
-                "rule_uk": "Фосфати лужних металів розчинні",
-                "rule_es": "Fosfatos de metales alcalinos son solubles",
-            }
-
-        # По умолчанию
-        return {
-            "compound": f"{cation}{anion}",
-            "solubility": "unknown",
-            "solubility_ru": "неизвестно",
-            "rule": "Нет данных в таблице растворимости",
-        }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        return _solubility_response(
+            cation, anion, "unknown", "solubility_rule_unknown", lang
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=_detail(exc, lang)) from exc
 
 
-@router.get("/redox", summary="Окислительно-восстановительные реакции")
+@router.get(
+    "/redox",
+    summary=get_text("inorg_ep_redox"),
+    description=get_text("inorg_desc_redox"),
+)
 def analyze_redox(
-    reaction: str = Query(..., description="Реакция в формате: Fe2O3 + CO -> Fe + CO2"),
+    reaction: str = Query(..., description=get_text("inorg_param_reaction")),
     lang: str = Depends(get_lang),
 ):
-    """
-    Анализирует ОВР:
-    - Определяет окислитель и восстановитель
-    - Уравнивает реакцию
-    - Показывает перенос электронов
-    """
+    """Balance a redox reaction and identify the oxidizing/reducing agents."""
     try:
-        # Парсим реакцию
-        parts = reaction.split("->")
-        if len(parts) != 2:
-            raise ValueError("Реакция должна быть в формате: A + B -> C + D")
+        left_terms, right_terms = _parse_reaction(reaction)
+        balanced = _balance_reaction(left_terms, right_terms)
+        if not balanced:
+            raise InorgError("inorg_balance_failed")
 
-        # убираем ведущие коэффициенты ("2H2" -> "H2")
-        left = [re.sub(r"^\d+\s*", "", s.strip()) for s in parts[0].split("+")]
-        right = [re.sub(r"^\d+\s*", "", s.strip()) for s in parts[1].split("+")]
-
-        # Парсим формулы
-        left_formulas = [_parse_formula(s) for s in left]
-        right_formulas = [_parse_formula(s) for s in right]
-
-        # Собираем все элементы
-        all_elements = set()
-        for f in left_formulas + right_formulas:
-            all_elements.update(f.keys())
-
-        # Уравниваем реакцию
-        balanced = _balance_reaction(left, right, left_formulas, right_formulas, all_elements)
-
+        agents = _reaction_agents(left_terms, right_terms, balanced["coefficients"])
         return {
             "reaction": reaction,
             "balanced": balanced["equation"],
+            "equation": balanced["equation"],
             "coefficients": balanced["coefficients"],
-            "oxidizing_agent": balanced.get("oxidizing_agent"),
-            "reducing_agent": balanced.get("reducing_agent"),
-            "electron_transfer": balanced.get("electron_transfer"),
+            **agents,
         }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=_detail(exc, lang)) from exc
 
 
-def _balance_reaction(left_formulas: List[str], right_formulas: List[str], left_parsed: List[Dict], right_parsed: List[Dict], elements: set) -> dict:
-    """
-    Уравнивает реакцию через нуль-пространство матрицы состава (точная арифметика Fraction).
-    Работает за полиномиальное время, в отличие от перебора коэффициентов.
-    """
-    from fractions import Fraction
-    from math import gcd
-    from functools import reduce
-
-    n_left = len(left_formulas)
-    n = n_left + len(right_formulas)
-    fail = {"equation": "Не удалось уравнять", "coefficients": [], "equation_en": "Could not balance"}
-    if n < 2:
-        return fail
-
-    # строки — элементы, столбцы — вещества (продукты со знаком минус)
-    rows = [
-        [Fraction(left_parsed[j].get(el, 0)) for j in range(n_left)]
-        + [Fraction(-right_parsed[j].get(el, 0)) for j in range(n - n_left)]
-        for el in sorted(elements)
-    ]
-
-    pivots, r = [], 0
-    for c in range(n):
-        p = next((i for i in range(r, len(rows)) if rows[i][c] != 0), None)
-        if p is None:
-            continue
-        rows[r], rows[p] = rows[p], rows[r]
-        pv = rows[r][c]
-        rows[r] = [x / pv for x in rows[r]]
-        for i in range(len(rows)):
-            if i != r and rows[i][c] != 0:
-                f = rows[i][c]
-                rows[i] = [a - f * b for a, b in zip(rows[i], rows[r])]
-        pivots.append(c)
-        r += 1
-        if r == len(rows):
-            break
-
-    free = [c for c in range(n) if c not in pivots]
-    if len(free) != 1:  # 0 — нет решения, >1 — уравнение неоднозначно
-        return fail
-
-    sol = [Fraction(0)] * n
-    sol[free[0]] = Fraction(1)
-    for i, pc in enumerate(pivots):
-        sol[pc] = -rows[i][free[0]]
-    if any(x <= 0 for x in sol):
-        return fail
-
-    lcm = reduce(lambda a, b: a * b // gcd(a, b), (x.denominator for x in sol))
-    ints = [int(x * lcm) for x in sol]
-    g = reduce(gcd, ints)
-    ints = [x // g for x in ints]
-
-    def term(k, name):
-        return f"{ints[k]}{name}" if ints[k] != 1 else name
-
-    left_str = " + ".join(term(i, left_formulas[i]) for i in range(n_left))
-    right_str = " + ".join(term(n_left + i, right_formulas[i]) for i in range(len(right_formulas)))
-    return {"equation": f"{left_str} -> {right_str}", "coefficients": ints}
-
-
-@router.get("/stoichiometry", summary="Стехиометрия реакции")
+@router.get(
+    "/stoichiometry",
+    summary=get_text("inorg_ep_stoichiometry"),
+    description=get_text("inorg_desc_stoichiometry"),
+)
 def calculate_stoichiometry(
-    reaction: str = Query(..., description="Реакция: 2H2 + O2 -> 2H2O"),
-    given_mass: Optional[float] = Query(None, description="Масса реагента в г"),
-    given_moles: Optional[float] = Query(None, description="Количество молей реагента"),
+    reaction: str = Query(..., description=get_text("inorg_param_stoich_reaction")),
+    given_mass: Optional[float] = Query(None, description=get_text("inorg_param_given_mass")),
+    given_moles: Optional[float] = Query(None, description=get_text("inorg_param_given_moles")),
+    given_formula: Optional[str] = Query(None, description=get_text("inorg_param_given_formula")),
     lang: str = Depends(get_lang),
 ):
     """
-    Рассчитывает стехиометрию реакции:
-    - Массы всех продуктов
-    - Количество молей всех веществ
-    - Теоретический выход
+    Calculate reaction stoichiometry. If coefficients are not provided, the
+    equation is balanced automatically. You may specify the reagent for which
+    the mass or amount is given.
     """
     try:
-        parts = reaction.split("->")
-        if len(parts) != 2:
-            raise ValueError("Реакция должна быть в формате: A + B -> C + D")
+        left_terms, right_terms = _parse_reaction(reaction)
+        balanced = None
+        if all(term["coeff"] == 1 for term in left_terms + right_terms):
+            balanced = _balance_reaction(left_terms, right_terms)
+            if balanced:
+                for index, term in enumerate(left_terms + right_terms):
+                    term["coeff"] = balanced["coefficients"][index]
 
-        left = [s.strip() for s in parts[0].split("+")]
-        right = [s.strip() for s in parts[1].split("+")]
-
-        # Парсим формулы с коэффициентами
-        left_parsed = []
-        for s in left:
-            # Проверяем коэффициент
-            coeff = 1
-            formula = s
-            if s[0].isdigit():
-                i = 0
-                while i < len(s) and s[i].isdigit():
-                    i += 1
-                coeff = int(s[:i])
-                formula = s[i:]
-            left_parsed.append({"formula": formula, "coeff": coeff, "elements": _parse_formula(formula)})
-
-        right_parsed = []
-        for s in right:
-            coeff = 1
-            formula = s
-            if s[0].isdigit():
-                i = 0
-                while i < len(s) and s[i].isdigit():
-                    i += 1
-                coeff = int(s[:i])
-                formula = s[i:]
-            right_parsed.append({"formula": formula, "coeff": coeff, "elements": _parse_formula(formula)})
-
-        # Вычисляем молекулярные массы
-        for item in left_parsed + right_parsed:
-            item["molar_mass"] = sum(ATOMIC_MASSES.get(e, 0) * c for e, c in item["elements"].items())
-
-        # Если дана масса или моли реагента
         if given_mass is not None or given_moles is not None:
-            # Берём первый реагент
-            reactant = left_parsed[0]
+            reactant = None
+            if given_formula:
+                normalized = _formula_data(given_formula)["formula"]
+                reactant = next(
+                    (
+                        term
+                        for term in left_terms
+                        if term.get("normalized_formula", term["formula"]) == normalized
+                    ),
+                    None,
+                )
+            if reactant is None:
+                reactant = left_terms[0]
+
             if given_moles is None:
                 given_moles = given_mass / reactant["molar_mass"]
 
-            # Мольное соотношение
             ratio = given_moles / reactant["coeff"]
-
-            # Рассчитываем продукты
-            products = []
-            for p in right_parsed:
-                moles = ratio * p["coeff"]
-                mass = moles * p["molar_mass"]
-                products.append({
-                    "formula": p["formula"],
-                    "moles": round(moles, 4),
-                    "mass_g": round(mass, 4),
-                })
-
+            reactants = [
+                {
+                    "formula": term["formula"],
+                    "coeff": term["coeff"],
+                    "moles": round(ratio * term["coeff"], 6),
+                    "mass_g": round(ratio * term["coeff"] * term["molar_mass"], 4),
+                }
+                for term in left_terms
+            ]
+            products = [
+                {
+                    "formula": term["formula"],
+                    "coeff": term["coeff"],
+                    "moles": round(ratio * term["coeff"], 6),
+                    "mass_g": round(ratio * term["coeff"] * term["molar_mass"], 4),
+                }
+                for term in right_terms
+            ]
             return {
                 "reaction": reaction,
+                "balanced": balanced["equation"] if balanced else reaction,
                 "given": {
                     "reactant": reactant["formula"],
                     "mass_g": given_mass,
-                    "moles": round(given_moles, 4),
+                    "moles": round(given_moles, 6),
                 },
+                "limiting_reagent": reactant["formula"],
+                "reactants": reactants,
                 "products": products,
             }
 
-        # Просто возвращаем стехиометрию
         return {
             "reaction": reaction,
-            "reactants": [{"formula": r["formula"], "coeff": r["coeff"], "molar_mass": round(r["molar_mass"], 4)} for r in left_parsed],
-            "products": [{"formula": p["formula"], "coeff": p["coeff"], "molar_mass": round(p["molar_mass"], 4)} for p in right_parsed],
+            "balanced": balanced["equation"] if balanced else reaction,
+            "reactants": [
+                {
+                    "formula": term["formula"],
+                    "coeff": term["coeff"],
+                    "molar_mass": round(term["molar_mass"], 4),
+                }
+                for term in left_terms
+            ],
+            "products": [
+                {
+                    "formula": term["formula"],
+                    "coeff": term["coeff"],
+                    "molar_mass": round(term["molar_mass"], 4),
+                }
+                for term in right_terms
+            ],
         }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=_detail(exc, lang)) from exc
 
 
-@router.get("/orbitals", summary="Электронная конфигурация и орбитали")
+@router.get(
+    "/orbitals",
+    summary=get_text("inorg_ep_orbitals"),
+    description=get_text("inorg_desc_orbitals"),
+)
 def get_orbitals(
-    element: str = Query(..., description="Символ элемента (например, Fe)"),
+    element: str = Query(..., description=get_text("inorg_param_element")),
     lang: str = Depends(get_lang),
 ):
-    """
-    Возвращает электронную конфигурацию элемента:
-    - Конфигурацию в нотации благородного газа
-    - Распределение по орбиталям
-    - Число неспаренных электронов
-    - Валентные электроны
-    """
+    """Return electron configuration, orbitals, unpaired and valence electrons."""
     try:
-        # Атомные номера
-        atomic_numbers = {
-            "H": 1, "He": 2, "Li": 3, "Be": 4, "B": 5, "C": 6, "N": 7, "O": 8, "F": 9, "Ne": 10,
-            "Na": 11, "Mg": 12, "Al": 13, "Si": 14, "P": 15, "S": 16, "Cl": 17, "Ar": 18,
-            "K": 19, "Ca": 20, "Sc": 21, "Ti": 22, "V": 23, "Cr": 24, "Mn": 25, "Fe": 26,
-            "Co": 27, "Ni": 28, "Cu": 29, "Zn": 30, "Ga": 31, "Ge": 32, "As": 33, "Se": 34,
-            "Br": 35, "Kr": 36, "Rb": 37, "Sr": 38, "Y": 39, "Zr": 40, "Nb": 41, "Mo": 42,
-            "Tc": 43, "Ru": 44, "Rh": 45, "Pd": 46, "Ag": 47, "Cd": 48, "In": 49, "Sn": 50,
-            "Sb": 51, "Te": 52, "I": 53, "Xe": 54, "Cs": 55, "Ba": 56, "La": 57, "Ce": 58,
-            "Pr": 59, "Nd": 60, "Pm": 61, "Sm": 62, "Eu": 63, "Gd": 64, "Tb": 65, "Dy": 66,
-            "Ho": 67, "Er": 68, "Tm": 69, "Yb": 70, "Lu": 71, "Hf": 72, "Ta": 73, "W": 74,
-            "Re": 75, "Os": 76, "Ir": 77, "Pt": 78, "Au": 79, "Hg": 80, "Tl": 81, "Pb": 82,
-            "Bi": 83, "Po": 84, "At": 85, "Rn": 86, "Fr": 87, "Ra": 88, "Ac": 89, "Th": 90,
-            "Pa": 91, "U": 92, "Np": 93, "Pu": 94, "Am": 95, "Cm": 96, "Bk": 97, "Cf": 98,
-            "Es": 99, "Fm": 100, "Md": 101, "No": 102, "Lr": 103, "Rf": 104, "Db": 105,
-            "Sg": 106, "Bh": 107, "Hs": 108, "Mt": 109, "Ds": 110, "Rg": 111, "Cn": 112,
-            "Nh": 113, "Fl": 114, "Mc": 115, "Lv": 116, "Ts": 117, "Og": 118,
-        }
-
-        Z = atomic_numbers.get(element)
-        if Z is None:
-            raise ValueError(f"Неизвестный элемент: {element}")
-
-        # Порядок заполнения орбиталей
-        orbital_order = [
-            ("1s", 2), ("2s", 2), ("2p", 6), ("3s", 2), ("3p", 6), ("4s", 2), ("3d", 10),
-            ("4p", 6), ("5s", 2), ("4d", 10), ("5p", 6), ("6s", 2), ("4f", 14), ("5d", 10),
-            ("6p", 6), ("7s", 2), ("5f", 14), ("6d", 10), ("7p", 6),
-        ]
-
-        # Заполняем орбитали
-        remaining = Z
-        filling = {}
-        for orbital, capacity in orbital_order:
-            e = min(remaining, capacity)
-            filling[orbital] = e
-            remaining -= e
-        filling.update(_AUFBAU_EXCEPTIONS.get(Z, {}))
-        config = [f"{o}{filling[o]}" for o, _ in orbital_order if filling[o] > 0]
-
-        # Нотация благородного газа
-        noble_gases = {2: "He", 10: "Ne", 18: "Ar", 36: "Kr", 54: "Xe", 86: "Rn", 118: "Og"}
-        core = ""
-        core_Z = 0
-        for ng_Z, ng in sorted(noble_gases.items()):
-            if ng_Z < Z:
-                core = ng
-                core_Z = ng_Z
-
-        if core:
-            # Упрощённо: берём всё после конфигурации благородного газа
-            core_labels = {c[:2] for c in _get_noble_gas_config(core).split()}
-            valence_config = " ".join(c for c in config if c[:2] not in core_labels)
-            config_str = f"[{core}] {valence_config}"
-        else:
-            config_str = " ".join(config)
-
-        # Неспарённые электроны (по правилу Хунда)
-        unpaired = _count_unpaired(config)
-
-        # Валентные электроны
-        valence = _count_valence(config)
-
+        data = _element_data(element)
+        config = data["expanded_configuration"]
+        valence = (
+            sum(electrons for _, _, electrons in config)
+            - _CORE_ELECTRONS.get(data.get("noble_gas_core"), 0)
+        )
         return {
-            "element": element,
-            "atomic_number": Z,
-            "electron_configuration": config_str,
-            "full_configuration": " ".join(config),
-            "unpaired_electrons": unpaired,
+            "element": data["symbol"],
+            "atomic_number": data["atomic_number"],
+            "electron_configuration": data["electron_configuration"],
+            "full_configuration": data["full_configuration"],
+            "unpaired_electrons": _count_unpaired(config),
             "valence_electrons": valence,
-            "orbitals": [{"orbital": f"{n}{l}", "electrons": e} for n, l, e in (_parse_orb(c) for c in config)],
+            "orbitals": [
+                {"orbital": f"{n}{letter}", "electrons": electrons}
+                for n, letter, electrons in config
+            ],
+            "period": data["period"],
+            "group": data["group"],
+            "block": data["block"],
         }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=_detail(exc, lang)) from exc
 
 
-def _get_noble_gas_config(element: str) -> str:
-    """Возвращает конфигурацию благородного газа."""
-    configs = {
-        "He": "1s2",
-        "Ne": "1s2 2s2 2p6",
-        "Ar": "1s2 2s2 2p6 3s2 3p6",
-        "Kr": "1s2 2s2 2p6 3s2 3p6 4s2 3d10 4p6",
-        "Xe": "1s2 2s2 2p6 3s2 3p6 4s2 3d10 4p6 5s2 4d10 5p6",
-        "Rn": "1s2 2s2 2p6 3s2 3p6 4s2 3d10 4p6 5s2 4d10 5p6 6s2 4f14 5d10 6p6",
-    }
-    return configs.get(element, "")
-
-
-_AUFBAU_EXCEPTIONS = {
-    24: {"4s": 1, "3d": 5},  # Cr
-    29: {"4s": 1, "3d": 10},  # Cu
-    41: {"5s": 1, "4d": 4},  # Nb
-    42: {"5s": 1, "4d": 5},  # Mo
-    44: {"5s": 1, "4d": 7},  # Ru
-    45: {"5s": 1, "4d": 8},  # Rh
-    46: {"5s": 0, "4d": 10},  # Pd
-    47: {"5s": 1, "4d": 10},  # Ag
-    57: {"4f": 0, "5d": 1},  # La
-    58: {"4f": 1, "5d": 1},  # Ce
-    64: {"4f": 7, "5d": 1},  # Gd
-    78: {"6s": 1, "5d": 9},  # Pt
-    79: {"6s": 1, "5d": 10},  # Au
-    89: {"5f": 0, "6d": 1},  # Ac
-    90: {"5f": 0, "6d": 2},  # Th
-    91: {"5f": 2, "6d": 1},  # Pa
-    92: {"5f": 3, "6d": 1},  # U
-    93: {"5f": 4, "6d": 1},  # Np
-    96: {"5f": 7, "6d": 1},  # Cm
-}
-
-
-def _parse_orb(item: str):
-    """'3d10' -> (3, 'd', 10)"""
-    m = re.match(r"^(\d)([spdf])(\d+)$", item)
-    return int(m.group(1)), m.group(2), int(m.group(3))
-
-
-def _count_unpaired(config: list) -> int:
-    """Неспаренные электроны по правилу Хунда."""
-    sub_orbitals = {"s": 1, "p": 3, "d": 5, "f": 7}
-    unpaired = 0
-    for item in config:
-        _, l, e = _parse_orb(item)
-        k = sub_orbitals[l]
-        unpaired += e if e <= k else 2 * k - e
-    return unpaired
-
-
-def _count_valence(config: list) -> int:
-    """Валентные электроны: внешние ns/np + незавершённые (n-1)d и (n-2)f."""
-    parsed = [_parse_orb(c) for c in config]
-    sp = [(n, l, e) for n, l, e in parsed if l in "sp"]
-    if not sp:
-        return 0
-    last_n = max(n for n, _, _ in sp)
-    # Pd ([Kr] 4d10): внешнего s-электрона нет, валентны 4d-электроны
-    if any(l == "d" and n == last_n for n, l, _ in parsed):
-        return sum(e for n, l, e in parsed if l == "d" and n == last_n)
-    valence = sum(e for n, l, e in sp if n == last_n)
-    s_last = sum(e for n, l, e in sp if n == last_n and l == "s")
-    for n, l, e in parsed:
-        # d10 считаем валентным только для группы 11 (Cu/Ag/Au: ns1 (n-1)d10)
-        if l == "d" and n == last_n - 1 and (e < 10 or s_last == 1):
-            valence += e
-        elif l == "f" and n == last_n - 2 and e < 14:
-            valence += e
-    return valence
-
-
-@router.get("/element_info", summary="Информация об элементе")
+@router.get(
+    "/element_info",
+    summary=get_text("inorg_ep_element_info"),
+    description=get_text("inorg_desc_element_info"),
+)
 def get_element_info(
-    symbol: str = Query(..., description="Символ элемента (например, Fe)"),
+    symbol: str = Query(..., description=get_text("inorg_param_symbol")),
     lang: str = Depends(get_lang),
 ):
-    """
-    Получает информацию об элементе:
-    - Атомный номер и масса
-    - Электроотрицательность
-    - Степени окисления
-    - Группа и период
-    """
+    """Return atomic number, mass, electronegativity, group, period and oxidation states."""
     try:
-        # Получаем из PubChem
-        info = _get_element_info(symbol)
-
-        # Добавляем локальные данные
-        info["electronegativity"] = ELECTRONEGATIVITY.get(symbol)
-        info["oxidation_states"] = OXIDATION_STATES.get(symbol, [])
-        info["atomic_mass"] = ATOMIC_MASSES.get(symbol)
-
-        # Группа и период (упрощённо)
-        atomic_numbers = {
-            "H": 1, "He": 2, "Li": 3, "Be": 4, "B": 5, "C": 6, "N": 7, "O": 8, "F": 9, "Ne": 10,
-            "Na": 11, "Mg": 12, "Al": 13, "Si": 14, "P": 15, "S": 16, "Cl": 17, "Ar": 18,
-            "K": 19, "Ca": 20, "Sc": 21, "Ti": 22, "V": 23, "Cr": 24, "Mn": 25, "Fe": 26,
-            "Co": 27, "Ni": 28, "Cu": 29, "Zn": 30, "Ga": 31, "Ge": 32, "As": 33, "Se": 34,
-            "Br": 35, "Kr": 36, "Rb": 37, "Sr": 38, "Y": 39, "Zr": 40, "Nb": 41, "Mo": 42,
-            "Tc": 43, "Ru": 44, "Rh": 45, "Pd": 46, "Ag": 47, "Cd": 48, "In": 49, "Sn": 50,
-            "Sb": 51, "Te": 52, "I": 53, "Xe": 54, "Cs": 55, "Ba": 56, "La": 57, "Ce": 58,
-            "Pr": 59, "Nd": 60, "Pm": 61, "Sm": 62, "Eu": 63, "Gd": 64, "Tb": 65, "Dy": 66,
-            "Ho": 67, "Er": 68, "Tm": 69, "Yb": 70, "Lu": 71, "Hf": 72, "Ta": 73, "W": 74,
-            "Re": 75, "Os": 76, "Ir": 77, "Pt": 78, "Au": 79, "Hg": 80, "Tl": 81, "Pb": 82,
-            "Bi": 83, "Po": 84, "At": 85, "Rn": 86, "Fr": 87, "Ra": 88, "Ac": 89, "Th": 90,
-            "Pa": 91, "U": 92, "Np": 93, "Pu": 94, "Am": 95, "Cm": 96, "Bk": 97, "Cf": 98,
-            "Es": 99, "Fm": 100, "Md": 101, "No": 102, "Lr": 103, "Rf": 104, "Db": 105,
-            "Sg": 106, "Bh": 107, "Hs": 108, "Mt": 109, "Ds": 110, "Rg": 111, "Cn": 112,
-            "Nh": 113, "Fl": 114, "Mc": 115, "Lv": 116, "Ts": 117, "Og": 118,
+        data = _element_data(symbol)
+        return {
+            "symbol": data["symbol"],
+            "name": data["name"],
+            "atomic_number": data["atomic_number"],
+            "atomic_mass": data["atomic_mass"],
+            "electronegativity": data["electronegativity"],
+            "oxidation_states": sorted({value for value, _ in data["oxidation_states"]}),
+            "group": data["group"],
+            "period": data["period"],
+            "block": data["block"],
+            "electron_configuration": data["electron_configuration"],
         }
-        Z = atomic_numbers.get(symbol)
-        if Z:
-            info["atomic_number"] = Z
-            # Период
-            if Z <= 2: info["period"] = 1
-            elif Z <= 10: info["period"] = 2
-            elif Z <= 18: info["period"] = 3
-            elif Z <= 36: info["period"] = 4
-            elif Z <= 54: info["period"] = 5
-            elif Z <= 86: info["period"] = 6
-            else: info["period"] = 7
-
-        return info
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=_detail(exc, lang)) from exc

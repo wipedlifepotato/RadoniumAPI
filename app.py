@@ -25,7 +25,7 @@ from rdkit.Chem import inchi  # ИСПРАВЛЕНИЕ: Отдельный им�
 
 app = FastAPI(
     title="SMILES API Rdkit",
-    description="Хемоинформатический API на базе RDKit",
+    description=get_text("app_description"),
     version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
@@ -343,7 +343,7 @@ def render(
 
 @app.get("/api/name_to_smiles")
 def name_to_smiles(
-    name: str = Query(..., description="Название молекулы (IUPAC или тривиальное)"),
+    name: str = Query(..., description=get_text("param_name")),
     lang: str = Depends(get_lang),
     db: Session = Depends(get_db),
 ):
@@ -527,12 +527,12 @@ def _get_pubchem_data(url: str, use_proxy: bool = True) -> dict:
 
 @app.get("/api/pubchem_toxicity")
 def check_toxicity_via_pubchem(
-    smiles: str = Query(..., description="SMILES молекулы, например C#N"),
+    smiles: str = Query(..., description=get_text("param_smiles_example")),
     lang: str = Depends(get_lang),
     db: Session = Depends(get_db),
 ):
     """
-    Проверяет токсичность молекулы через PubChem API.
+    Check molecule toxicity through the PubChem API.
     
     Использует PubChem PUG REST API для:
     1. Поиска CID (Compound ID) по SMILES
@@ -578,7 +578,7 @@ def check_toxicity_via_pubchem(
     
     cids = data.get("IdentifierList", {}).get("CID", [])
     if not cids:
-        raise HTTPException(status_code=404, detail="CID не найден для данной молекулы")
+        raise HTTPException(status_code=404, detail=get_text("pubchem_cid_not_found", lang))
     
     cid = cids[0]
 
@@ -629,12 +629,12 @@ def check_toxicity_via_pubchem(
 
 @app.get("/api/combined_toxicity")
 def combined_toxicity_assessment(
-    smiles: str = Query(..., description="SMILES молекулы, например C#N"),
+    smiles: str = Query(..., description=get_text("param_smiles_example")),
     lang: str = Depends(get_lang),
     db: Session = Depends(get_db),
 ):
     """
-    Комбинированная оценка токсичности: RDKit (Brenk/PAINS) + PubChem (GHS).
+    Combined toxicity assessment: RDKit (Brenk/PAINS) + PubChem (GHS).
     
     Объединяет результаты из двух источников:
     - RDKit FilterCatalog (Brenk filters, PAINS)

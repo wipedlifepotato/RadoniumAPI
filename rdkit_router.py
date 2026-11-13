@@ -30,7 +30,7 @@ from rdkit.Chem.Scaffolds import MurckoScaffold
 from rdkit.ML.Cluster import Butina
 from rdkit.Chem.EnumerateStereoisomers import EnumerateStereoisomers, StereoEnumerationOptions
 from rdkit.Chem.Draw import rdMolDraw2D
-from rdkit.Chem import rdMolTransforms
+from rdkit.Chem import rdMolTransforms, rdMolAlign
 
 router = APIRouter(prefix="/rdkit/api", tags=["RDKit Enhanced API"])
 
@@ -2384,37 +2384,37 @@ def enumerate_stereoisomers(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@router.get("/3d_conformers", summary="3D-конформеры с интерактивной визуализацией")
+@router.get("/3d_conformers", summary=get_text("ep_3d_conformers_desc"))
 def get_3d_conformers(
     smiles: str = Query(..., description=get_text("param_smiles")),
     num_conformers: int = Query(5, ge=1, le=20, description=get_text("param_num_conformers")),
     lang: str = Depends(get_lang),
 ):
     """
-    Генерирует 3D-конформеры молекулы с интерактивной визуализацией.
+    Generate 3D conformers of a molecule with interactive visualization.
 
-    Возвращает HTML-страницу с 3Dmol.js визуализацией:
-    - Вращение молекулы мышью
-    - Отображение энергии каждого конформера
-    - Переключение между конформерами
-    - Автоматическое вращение (spin)
+    Returns an HTML page with a 3Dmol.js viewer:
+    - rotate the molecule with the mouse
+    - show the energy of each conformer
+    - switch between conformers
+    - automatic spin
 
-    **Параметры:**
-    - `smiles` — строка SMILES молекулы
-    - `num_conformers` — количество конформеров (1–20, по умолчанию 5)
-    - `lang` — язык ответа (ru, en, uk, es)
+    **Parameters:**
+    - `smiles` — molecule SMILES string
+    - `num_conformers` — number of conformers (1–20, default 5)
+    - `lang` — response language (en, ru, uk, es)
 
-    **Возвращает:**
-    - HTML-страницу с интерактивной 3D-визуализацией
+    **Returns:**
+    - an HTML page with interactive 3D visualization
 
-    **Пример запроса:**
+    **Example request:**
     ```
-    GET /rdkit/api/3d_conformers?smiles=CCO&num_conformers=5&lang=ru
+    GET /rdkit/api/3d_conformers?smiles=CCO&num_conformers=5&lang=en
     ```
 
-    **Примечание:**
-    Для просмотра откройте ответ в браузере. Страница использует 3Dmol.js
-    для интерактивной визуализации молекулы.
+    **Note:**
+    Open the response in a browser. The page uses 3Dmol.js for interactive
+    visualization of the molecule.
     """
     try:
         m = Molecule(smiles)
@@ -2423,7 +2423,7 @@ def get_3d_conformers(
 
         mol = Chem.AddHs(m.m)
 
-        # Генерация конформеров
+        # Generate conformers
         params = AllChem.ETKDGv3()
         params.numThreads = 0
         cids = AllChem.EmbedMultipleConfs(mol, numConfs=num_conformers, params=params)
@@ -2431,44 +2431,17 @@ def get_3d_conformers(
         if len(cids) == 0:
             raise ValueError(get_text("failed_to_generate_conformers", lang))
 
-        # Оптимизация и сбор данных
+        # Optimize and collect data
         conformers = []
         for cid in cids:
             try:
                 energy = _optimize_and_energy(mol, cid)
-
-                # Координаты атомов
-                conf = mol.GetConformer(cid)
-                atoms = []
-                for atom in mol.GetAtoms():
-                    pos = conf.GetAtomPosition(atom.GetIdx())
-                    atoms.append(
-                        {
-                            "index": atom.GetIdx(),
-                            "element": atom.GetSymbol(),
-                            "x": round(pos.x, 4),
-                            "y": round(pos.y, 4),
-                            "z": round(pos.z, 4),
-                        }
-                    )
-
-                # Связи
-                bonds = []
-                for bond in mol.GetBonds():
-                    bonds.append(
-                        {
-                            "begin": bond.GetBeginAtomIdx(),
-                            "end": bond.GetEndAtomIdx(),
-                            "type": str(bond.GetBondType()),
-                        }
-                    )
-
+                sdf = Chem.MolToMolBlock(mol, confId=cid)
                 conformers.append(
                     {
                         "conf_id": int(cid),
                         "energy": round(energy, 4),
-                        "atoms": atoms,
-                        "bonds": bonds,
+                        "sdf": sdf,
                     }
                 )
             except Exception:
@@ -2482,12 +2455,12 @@ def get_3d_conformers(
         conformers_json = json.dumps(conformers).replace("</", "<\\/")
         smiles_html = html_lib.escape(smiles)
 
-        # Генерация HTML с 3Dmol.js
+        # Build the interactive 3Dmol.js page
         html_content = f"""<!DOCTYPE html>
-<html>
+<html lang="{lang}">
 <head>
     <meta charset="utf-8">
-    <title>3D Conformers — {smiles_html}</title>
+    <title>{get_text("conf3d_title", lang)} — {smiles_html}</title>
     <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
     <style>
         body {{ font-family: Arial, sans-serif; margin: 20px; }}
@@ -2499,17 +2472,17 @@ def get_3d_conformers(
     </style>
 </head>
 <body>
-    <h2>3D-конформеры: {smiles_html}</h2>
+    <h2>{get_text("conf3d_title", lang)}: {smiles_html}</h2>
     <div class="info">
-        <strong>Конформер:</strong> <span id="conf-id">1</span> |
-        <strong>Энергия:</strong> <span id="conf-energy">{conformers[0]["energy"] if conformers else 0}</span> ккал/моль |
-        <strong>Всего:</strong> {len(conformers)}
+        <strong>{get_text("conf3d_conformer", lang)}:</strong> <span id="conf-id">1</span> |
+        <strong>{get_text("conf3d_energy", lang)}:</strong> <span id="conf-energy">{conformers[0]["energy"] if conformers else 0}</span> {get_text("conf3d_energy_unit", lang)} |
+        <strong>{get_text("conf3d_total", lang)}:</strong> {len(conformers)}
     </div>
     <div class="controls">
-        <button onclick="prevConformer()">← Предыдущий</button>
-        <button onclick="nextConformer()">Следующий →</button>
-        <button onclick="toggleSpin()">Вращение</button>
-        <button onclick="resetView()">Сброс</button>
+        <button onclick="prevConformer()">{get_text("conf3d_prev", lang)}</button>
+        <button onclick="nextConformer()">{get_text("conf3d_next", lang)}</button>
+        <button onclick="toggleSpin()">{get_text("conf3d_spin", lang)}</button>
+        <button onclick="resetView()">{get_text("conf3d_reset", lang)}</button>
     </div>
     <div id="viewer"></div>
 
@@ -2532,27 +2505,12 @@ def get_3d_conformers(
             currentConf = idx;
             let conf = conformers[idx];
             viewer.clear();
+            viewer.addModel(conf.sdf, 'sdf');
+            viewer.setStyle({{}}, {{stick: {{}}}});
 
-            // Добавляем атомы
-            conf.atoms.forEach(atom => {{
-                viewer.addAtom({{
-                    x: atom.x,
-                    y: atom.y,
-                    z: atom.z,
-                    elem: atom.element
-                }});
-            }});
-
-            // Добавляем связи
-            conf.bonds.forEach(bond => {{
-                viewer.addBond({{ atom1: bond.begin, atom2: bond.end }});
-            }});
-
-            // Обновляем информацию
             document.getElementById('conf-id').textContent = idx + 1;
             document.getElementById('conf-energy').textContent = conf.energy;
 
-            viewer.setStyle({{}}, {{stick: {{}}}});
             viewer.zoomTo();
             viewer.render();
         }}
@@ -2592,293 +2550,120 @@ def get_3d_conformers(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _calculate_cremer_pople(coords):
-    """
-    Вычисляет параметры складчатости Кремера-Попла для цикла.
-    
-    Для 6-членных циклов: theta, phi, Q
-    Для 5-членных циклов: theta, phi, q
-    
-    coords: список (x, y, z) координат атомов цикла
-    """
-    import math
-    import numpy as np
-
-    n = len(coords)
-    if n < 5:
-        return None
-
-    # Центроид цикла
-    centroid = np.mean(coords, axis=0)
-    
-    # Векторы от центроида к атомам
-    vecs = coords - centroid
-    
-    # Для 6-членных циклов
-    if n == 6:
-        # Вычисляем z-координаты относительно средней плоскости
-        # Используем SVD для нахождения нормали к плоскости
-        _, _, vh = np.linalg.svd(vecs)
-        normal = vh[-1]  # Последняя строка — нормаль к плоскости
-        
-        z = np.dot(vecs, normal)
-        
-        # Параметры Кремера-Попла для 6-членного цикла
-        # Q = sqrt(sum(z_i^2))
-        Q = np.sqrt(np.sum(z**2))
-        
-        # theta и phi
-        if Q < 1e-6:
-            return {"Q": 0.0, "theta": 0.0, "phi": 0.0, "conformation": "planar"}
-        
-        # Вычисляем theta и phi по формулам
-        # Для 6-членного цикла:
-        # z_i = Q * cos(theta) * cos(phi + 2*pi*i/6) для i=0..5
-        # Используем преобразование Фурье
-        
-        # Упрощённый подход: используем первые два гармонических компонента
-        angles = np.array([2 * np.pi * i / 6 for i in range(6)])
-        
-        # Разложение по косинусам и синусам
-        a1 = np.sum(z * np.cos(angles))
-        b1 = np.sum(z * np.sin(angles))
-        a2 = np.sum(z * np.cos(2 * angles))
-        b2 = np.sum(z * np.sin(2 * angles))
-        
-        # Для 6-членного цикла основная гармоника — m=2
-        # theta = arccos(a2 / (Q * sqrt(3/2)))
-        # phi = atan2(b2, a2)
-        
-        # Нормализация
-        denom = Q * np.sqrt(1.5)
-        if denom > 1e-6:
-            cos_theta = np.clip(a2 / denom, -1, 1)
-            theta = np.arccos(cos_theta) * 180 / np.pi
-            phi = np.arctan2(b2, a2) * 180 / np.pi
-        else:
-            theta = 0.0
-            phi = 0.0
-        
-        # Классификация конформации
-        conformation = _classify_6ring(theta, phi)
-        
-        return {
-            "Q": round(float(Q), 4),
-            "theta": round(float(theta), 2),
-            "phi": round(float(phi), 2),
-            "conformation": conformation,
-        }
-    
-    # Для 5-членных циклов
-    elif n == 5:
-        _, _, vh = np.linalg.svd(vecs)
-        normal = vh[-1]
-        z = np.dot(vecs, normal)
-        
-        q = np.sqrt(np.sum(z**2))
-        
-        if q < 1e-6:
-            return {"q": 0.0, "theta": 0.0, "phi": 0.0, "conformation": "planar"}
-        
-        angles = np.array([2 * np.pi * i / 5 for i in range(5)])
-        
-        a1 = np.sum(z * np.cos(angles))
-        b1 = np.sum(z * np.sin(angles))
-        a2 = np.sum(z * np.cos(2 * angles))
-        b2 = np.sum(z * np.sin(2 * angles))
-        
-        # Для 5-членного цикла основная гармоника — m=2
-        denom = q * np.sqrt(2)
-        if denom > 1e-6:
-            cos_theta = np.clip(a2 / denom, -1, 1)
-            theta = np.arccos(cos_theta) * 180 / np.pi
-            phi = np.arctan2(b2, a2) * 180 / np.pi
-        else:
-            theta = 0.0
-            phi = 0.0
-        
-        conformation = _classify_5ring(theta, phi)
-        
-        return {
-            "q": round(float(q), 4),
-            "theta": round(float(theta), 2),
-            "phi": round(float(phi), 2),
-            "conformation": conformation,
-        }
-    
-    return None
-
-
-def _classify_6ring(theta, phi):
-    """Классификация конформации 6-членного цикла."""
-    if theta < 30 or theta > 150:
-        return "chair"
-    elif 30 <= theta <= 60 or 120 <= theta <= 150:
-        return "half-chair"
-    elif 60 < theta < 120:
-        # Различаем boat и twist-boat по phi
-        phi_mod = phi % 60
-        if phi_mod < 15 or phi_mod > 45:
-            return "boat"
-        else:
-            return "twist-boat"
-    return "unknown"
-
-
-def _classify_5ring(theta, phi):
-    """Классификация конформации 5-членного цикла."""
-    if theta < 30:
-        return "envelope"
-    elif 30 <= theta <= 90:
-        return "half-envelope"
-    else:
-        return "twist"
-    return "unknown"
-
-
 def _cremer_pople(coords):
     """
-    Параметры складчатости Кремера–Попла (1975) по 3D-координатам атомов цикла
-    (атомы должны идти по порядку обхода цикла). Поддерживаются 5- и 6-членные циклы.
-    Q/q — амплитуда в Å, theta/phi — в градусах.
+    Cremer–Pople puckering parameters (1975) from the 3D coordinates of the
+    ring atoms in cyclic order.
+
+    Returns Q/q (Å), theta/phi (degrees) and an approximate conformation
+    label. For rings larger than six atoms only the amplitude and phase are
+    reported; ``theta`` is None.
     """
     R = np.asarray(coords, dtype=float)
     n = len(R)
-    if n not in (5, 6):
+    if n < 5:
         return None
+
     R = R - R.mean(axis=0)
     ang = 2.0 * np.pi * np.arange(n) / n
     r1 = (R * np.sin(ang)[:, None]).sum(axis=0)
     r2 = (R * np.cos(ang)[:, None]).sum(axis=0)
-    nv = np.cross(r1, r2)
-    norm = np.linalg.norm(nv)
+    normal = np.cross(r1, r2)
+    norm = np.linalg.norm(normal)
     if norm < 1e-8:
-        return None
-    z = R @ (nv / norm)  # отклонения от средней плоскости
-    amp = float(np.sqrt(np.sum(z ** 2)))
+        # A perfectly planar ring has no preferred normal; use SVD.
+        _, _, vh = np.linalg.svd(R)
+        normal = vh[-1]
+        norm = np.linalg.norm(normal)
+        if norm < 1e-8:
+            return None
 
-    j = np.arange(n)
+    z = R @ (normal / norm)
+    amplitude = float(np.sqrt(np.sum(z ** 2)))
+
     a2 = np.sqrt(2.0 / n) * np.sum(z * np.cos(2 * ang))
     b2 = -np.sqrt(2.0 / n) * np.sum(z * np.sin(2 * ang))
     q2 = float(np.hypot(a2, b2))
-    phi = float(np.degrees(np.arctan2(b2, a2)) % 360.0) if q2 > 0.02 else 0.0  # для кресла φ не определён
+    phi = float(np.degrees(np.arctan2(b2, a2)) % 360.0) if q2 > 0.02 else 0.0
 
     if n == 6:
-        q3 = float(np.sqrt(1.0 / n) * np.sum(((-1.0) ** j) * z))
+        q3 = float(np.sqrt(1.0 / n) * np.sum(((-1.0) ** np.arange(n)) * z))
         theta = float(np.degrees(np.arctan2(q2, q3)))
-        if amp < 0.05:
-            theta, phi = 0.0, 0.0  # у плоского цикла углы не определены — не показываем численный шум
+        if amplitude < 0.05:
+            theta, phi = 0.0, 0.0
             label = "planar"
         elif theta <= 25 or theta >= 155:
             label = "chair"
         elif 65 <= theta <= 115:
-            pm = phi % 60.0
-            label = "boat" if (pm <= 15 or pm >= 45) else "twist-boat"
+            phase = phi % 60.0
+            label = "boat" if (phase <= 15 or phase >= 45) else "twist-boat"
         else:
-            label = "half-chair/envelope"
-        return {"Q": round(amp, 4), "theta": round(theta, 2), "phi": round(phi, 2), "conformation": label}
+            label = "half-chair"
+        return {
+            "Q": round(amplitude, 4),
+            "theta": round(theta, 2),
+            "phi": round(phi, 2),
+            "conformation": label,
+        }
 
-    # n == 5: единственная мода m=2, θ не определён
-    pm = phi % 36.0
-    if amp < 0.05:
+    if n == 5:
+        if amplitude < 0.05:
+            phi = 0.0
+            label = "planar"
+        else:
+            phase = phi % 36.0
+            label = "envelope" if (phase <= 9 or phase >= 27) else "twist"
+        return {
+            "q": round(amplitude, 4),
+            "theta": None,
+            "phi": round(phi, 2),
+            "conformation": label,
+        }
+
+    if amplitude < 0.05:
         phi = 0.0
         label = "planar"
     else:
-        label = "envelope" if (pm <= 9 or pm >= 27) else "twist"
-    return {"q": round(amp, 4), "theta": None, "phi": round(phi, 2), "conformation": label}
+        label = "puckered"
+    return {
+        "Q": round(amplitude, 4),
+        "theta": None,
+        "phi": round(phi, 2),
+        "conformation": label,
+    }
 
 
-def _calculate_cremer_pople_from_dihedrals(dihedrals, n):
-    """
-    Вычисляет параметры Кремера-Попла из диэдральных углов.
-    Упрощённая версия для классификации конформаций.
-    """
-    import math
+def _cluster_ring_conformers(mol, ring_atoms, cids, cutoff=0.5):
+    """Cluster ring conformers by heavy-atom RMSD with the Butina algorithm."""
+    if len(cids) <= 1:
+        return [[int(cid) for cid in cids]]
 
-    if n == 6:
-        # Для 6-членных циклов
-        # Сумма квадратов диэдральных углов
-        sum_sq = sum(d**2 for d in dihedrals)
-        Q = math.sqrt(sum_sq / n)
+    atom_map = [(int(index), int(index)) for index in ring_atoms]
+    distances = []
+    for i in range(1, len(cids)):
+        for j in range(i):
+            try:
+                distance = rdMolAlign.GetBestRMS(
+                    mol, mol, int(cids[i]), int(cids[j]), map=atom_map
+                )
+            except Exception:
+                distance = 1.0e3
+            distances.append(float(distance))
 
-        # Среднее значение
-        mean = sum(dihedrals) / n
-
-        # Определяем тип конформации по характерным признакам
-        # Chair: чередующиеся +60/-60
-        # Boat: два угла ~0, остальные ±60
-        # Twist-boat: промежуточные значения
-
-        # Считаем количество углов близких к 0 (характерно для boat)
-        near_zero = sum(1 for d in dihedrals if abs(d) < 15)
-
-        # Считаем количество углов близких к ±60 (характерно для chair)
-        near_sixty = sum(1 for d in dihedrals if abs(abs(d) - 60) < 15)
-
-        if near_sixty >= 4:
-            conformation = "chair"
-        elif near_zero >= 2:
-            conformation = "boat"
-        else:
-            conformation = "twist-boat"
-
-        # Вычисляем theta и phi на основе диэдральных углов
-        # Для chair: theta ~ 0 или 180, phi ~ 0
-        # Для boat: theta ~ 90, phi ~ 0 или 60
-        # Для twist-boat: theta ~ 90, phi ~ 30 или 90
-
-        if conformation == "chair":
-            theta = 0.0 if mean > 0 else 180.0
-            phi = 0.0
-        elif conformation == "boat":
-            theta = 90.0
-            phi = 0.0 if near_zero >= 2 else 60.0
-        else:  # twist-boat
-            theta = 90.0
-            phi = 30.0
-
-        return {
-            "Q": round(Q, 4),
-            "theta": round(theta, 2),
-            "phi": round(phi, 2),
-            "conformation": conformation,
-        }
-
-    elif n == 5:
-        # Для 5-членных циклов
-        sum_sq = sum(d**2 for d in dihedrals)
-        q = math.sqrt(sum_sq / n)
-
-        # Определяем тип конформации
-        # Envelope: один атом выбит из плоскости (один угол близок к 0)
-        # Twist: два атома выбиты в разные стороны
-        near_zero = sum(1 for d in dihedrals if abs(d) < 20)
-        max_angle = max(abs(d) for d in dihedrals)
-
-        if near_zero >= 1 and max_angle > 30:
-            conformation = "envelope"
-        elif max_angle > 30:
-            conformation = "twist"
-        else:
-            conformation = "planar"
-
-        return {
-            "q": round(q, 4),
-            "theta": 0.0,
-            "phi": 0.0,
-            "conformation": conformation,
-        }
-
-    return None
+    clusters = Butina.ClusterData(
+        distances, len(cids), cutoff, isDistData=True, reordering=True
+    )
+    return [[int(cids[index]) for index in cluster] for cluster in clusters]
 
 
 def _get_ring_conformation_for_conf(mol, ring_atoms, conf_id):
     """
-    Определяет конформацию цикла для конкретного конформера.
-    Использует rdMolTransforms.GetDihedralDeg для корректного вычисления углов.
+    Determine the ring conformation for one conformer.
 
-    ring_atoms: список индексов атомов цикла
-    conf_id: ID конформера
+    Uses rdMolTransforms.GetDihedralDeg for the torsion angles.
+
+    ring_atoms: atom indices of the ring
+    conf_id: conformer ID
     """
     if len(ring_atoms) < 5:
         return None
@@ -2886,7 +2671,7 @@ def _get_ring_conformation_for_conf(mol, ring_atoms, conf_id):
     conf = mol.GetConformer(conf_id)
     n = len(ring_atoms)
 
-    # Диэдральные углы через rdMolTransforms
+    # Torsion angles via rdMolTransforms
     dihedrals = []
     for i in range(n):
         i1 = ring_atoms[i]
@@ -2896,14 +2681,12 @@ def _get_ring_conformation_for_conf(mol, ring_atoms, conf_id):
         angle = rdMolTransforms.GetDihedralDeg(conf, i1, i2, i3, i4)
         dihedrals.append(round(float(angle), 2))
 
-    # Параметры Кремера-Попла
+    # Cremer–Pople parameters
     coords = []
     for idx in ring_atoms:
         pos = conf.GetAtomPosition(idx)
         coords.append([pos.x, pos.y, pos.z])
     cp_params = _cremer_pople(coords)
-    if cp_params is None:  # циклы других размеров — грубая эвристика по диэдрам
-        cp_params = _calculate_cremer_pople_from_dihedrals(dihedrals, n)
 
     return {
         "conf_id": int(conf_id),
@@ -2912,40 +2695,40 @@ def _get_ring_conformation_for_conf(mol, ring_atoms, conf_id):
     }
 
 
-@router.get("/ring_conformation", summary="Анализ конформаций колец")
+@router.get("/ring_conformation", summary=get_text("ep_ring_conformation_desc"))
 def analyze_ring_conformation(
     smiles: str = Query(..., description=get_text("param_smiles")),
     lang: str = Depends(get_lang),
 ):
     """
-    Анализирует конформации всех циклов в молекуле.
+    Analyze the conformations of every ring in the molecule.
 
-    Определяет тип конформации цикла (Chair, Boat, Twist-boat, Envelope и т.д.)
-    и вычисляет параметры складчатости Кремера-Попла (θ, φ, Q).
+    Determines the ring conformation type (chair, boat, twist-boat, envelope,
+    etc.) and computes the Cremer–Pople puckering parameters (theta, phi, Q).
 
-    **Параметры:**
-    - `smiles` — строка SMILES молекулы
-    - `lang` — язык ответа (ru, en, uk, es)
+    **Parameters:**
+    - `smiles` — molecule SMILES string
+    - `lang` — response language (en, ru, uk, es)
 
-    **Возвращает:**
-    - `total_rings` — количество циклов
-    - `rings` — список циклов с параметрами:
-      - `ring_size` — размер цикла
-      - `atom_indices` — индексы атомов цикла
-      - `dihedral_angles` — диэдральные углы
-      - `cremer_pople` — параметры Кремера-Попла:
-        - `Q` — амплитуда складчатости (для 6-членных)
-        - `q` — амплитуда складчатости (для 5-членных)
-        - `theta` — полярный угол (°)
-        - `phi` — азимутальный угол (°)
-        - `conformation` — тип конформации
+    **Returns:**
+    - `total_rings` — number of rings
+    - `rings` — ring data:
+      - `ring_size` — ring size
+      - `atom_indices` — ring atom indices
+      - `dihedral_angles` — torsion angles
+      - `cremer_pople` — Cremer–Pople parameters:
+        - `Q` — puckering amplitude (six-membered rings)
+        - `q` — puckering amplitude (five-membered rings)
+        - `theta` — polar angle (degrees)
+        - `phi` — azimuthal angle (degrees)
+        - `conformation` — conformation type
 
-    **Пример запроса:**
+    **Example request:**
     ```
-    GET /rdkit/api/ring_conformation?smiles=C1CCCCC1&lang=ru
+    GET /rdkit/api/ring_conformation?smiles=C1CCCCC1&lang=en
     ```
 
-    **Пример ответа:**
+    **Example response:**
     ```json
     {
         "smiles": "C1CCCCC1",
@@ -2978,22 +2761,20 @@ def analyze_ring_conformation(
 def _analyze_all_ring_conformations(
     mol: Chem.Mol,
     smiles: str,
-    lang: str = "ru",
+    lang: str = "en",
 ) -> dict:
     """
-    Генерирует 20 конформеров, вычисляет энергию каждого,
-    определяет все уникальные конформации циклов с указанием
-    наиболее стабильной (min energy) и наименее стабильной (max energy).
+    Generate 20 conformers, optimize them, cluster ring geometries by RMSD
+    and report the most and least stable ring conformation.
 
     Args:
-        mol: RDKit молекула (с добавленными атомами водорода)
-        smiles: исходная SMILES строка
-        lang: язык ответа
+        mol: RDKit molecule with explicit hydrogens
+        smiles: original SMILES string
+        lang: response language
 
     Returns:
-        словарь с результатами анализа
+        dictionary with the analysis results
     """
-    # Находим все циклы (индексы атомов C/H в молекуле с водородами)
     ring_info = mol.GetRingInfo()
     rings = ring_info.AtomRings()
 
@@ -3006,15 +2787,14 @@ def _analyze_all_ring_conformations(
             "warning": get_text("ring_conf_warning", lang),
         }
 
-    # Генерация 20 конформеров
     params = AllChem.ETKDGv3()
     params.numThreads = 0
+    params.randomSeed = 0xF00D
     cids = AllChem.EmbedMultipleConfs(mol, numConfs=20, params=params)
 
     if len(cids) == 0:
         raise ValueError(get_text("failed_to_generate_conformers", lang))
 
-    # Оптимизация и вычисление энергии для каждого конформера
     conf_energies = {}
     for cid in cids:
         energy = 0.0
@@ -3022,78 +2802,51 @@ def _analyze_all_ring_conformations(
             energy = _optimize_and_energy(mol, cid)
         except Exception:
             try:
-                # Fallback: UFF
                 AllChem.UFFOptimizeMolecule(mol, confId=cid)
                 ff = AllChem.UFFGetMoleculeForceField(mol, confId=cid)
                 if ff:
                     energy = ff.CalcEnergy()
             except Exception:
                 pass
-
         conf_energies[int(cid)] = round(float(energy), 4)
 
-    # Анализируем каждый цикл для всех конформеров
     rings_data = []
     for ring in rings:
         ring_atoms = list(ring)
-        unique_conformations = []
-        seen_dihedrals = []  # Для проверки уникальности по диэдральным углам
-        seen_energies = []  # Для проверки уникальности по энергии
-        seen_pairs = []  # (форма, энергия)
+        clusters = _cluster_ring_conformers(mol, ring_atoms, list(cids))
+        conformations = []
 
-        for cid in cids:
-            if int(cid) not in conf_energies:
+        for cluster in clusters:
+            best_cid = min(cluster, key=lambda cid: conf_energies.get(cid, float("inf")))
+            conf_data = _get_ring_conformation_for_conf(mol, ring_atoms, best_cid)
+            if not conf_data or not conf_data["cremer_pople"]:
                 continue
+            conf_data["energy"] = conf_energies.get(best_cid, 0.0)
+            conf_data["cluster_size"] = len(cluster)
+            conformations.append(conf_data)
 
-            conf_data = _get_ring_conformation_for_conf(mol, ring_atoms, int(cid))
-            if conf_data and conf_data["cremer_pople"]:
-                energy = conf_energies[int(cid)]
-                
-                # Проверяем уникальность по энергии (допуск 0.5 kcal/mol)
-                is_unique_energy = True
-                for e in seen_energies:
-                    if abs(e - energy) < 0.5:
-                        is_unique_energy = False
-                        break
+        if not conformations:
+            continue
 
-                # Проверяем уникальность по диэдральным углам (допуск 15 градусов)
-                is_unique_dihedral = True
-                for seen in seen_dihedrals:
-                    if len(seen) == len(conf_data["dihedral_angles"]):
-                        if all(abs(a - b) < 15.0 for a, b in zip(seen, conf_data["dihedral_angles"])):
-                            is_unique_dihedral = False
-                            break
+        conformations.sort(key=lambda item: item["energy"])
+        last_index = len(conformations) - 1
+        for index, conformation in enumerate(conformations):
+            conformation["is_most_stable"] = index == 0
+            conformation["is_least_stable"] = index == last_index
 
-                # Конформация уникальна, если уникальна по энергии ИЛИ по углам
-                label = conf_data["cremer_pople"]["conformation"]
-                is_new = not any(l == label and abs(e - energy) < 0.5 for l, e in seen_pairs)
-                if is_new:
-                    seen_pairs.append((label, energy))
-                    seen_dihedrals.append(conf_data["dihedral_angles"])
-                    seen_energies.append(energy)
-                    conf_data["energy"] = energy
-                    unique_conformations.append(conf_data)
-
-        if unique_conformations:
-            # Находим наиболее и наименее стабильные
-            energies = [c["energy"] for c in unique_conformations]
-            min_energy_idx = energies.index(min(energies))
-            max_energy_idx = energies.index(max(energies))
-
-            for i, c in enumerate(unique_conformations):
-                c["is_most_stable"] = (i == min_energy_idx)
-                c["is_least_stable"] = (i == max_energy_idx)
-
-            rings_data.append({
+        energies = [item["energy"] for item in conformations]
+        rings_data.append(
+            {
                 "ring_size": len(ring_atoms),
-                "atom_indices": list(ring_atoms),
-                "conformations": unique_conformations,
-                "total_conformations_found": len(unique_conformations),
-                "most_stable_conformation": unique_conformations[min_energy_idx]["cremer_pople"]["conformation"],
-                "least_stable_conformation": unique_conformations[max_energy_idx]["cremer_pople"]["conformation"],
+                "atom_indices": ring_atoms,
+                "conformations": conformations,
+                "total_conformations_found": len(conformations),
+                "most_stable_conformation": conformations[0]["cremer_pople"]["conformation"],
+                "least_stable_conformation": conformations[-1]["cremer_pople"]["conformation"],
                 "min_energy": min(energies),
                 "max_energy": max(energies),
-            })
+            }
+        )
 
     return {
         "smiles": smiles,

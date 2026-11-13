@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -1553,8 +1553,8 @@
             tipText: 'Haga clic en el botón "Ayuda" en cualquier momento para volver a esta guía. Todos los términos están explicados en lenguaje sencillo para principiantes.'
         }
     };
-    let currentLang = localStorage.getItem('lang') || 'ru';
-    const langs = ['ru', 'uk', 'en', 'es'];
+    let currentLang = localStorage.getItem('lang') || 'en';
+    const langs = ['en', 'ru', 'uk', 'es'];
     function t(key) { return (I18N[currentLang] && I18N[currentLang][key]) || key; }
     function escapeHtml(str) {
         if (str == null) return '';
@@ -2229,7 +2229,8 @@
             if (res.ok) {
                 let html = `<b>Bond Type: ${escapeHtml(elem1)}-${escapeHtml(elem2)}</b><br>`;
                 html += `ΔEN = ${escapeHtml(data.delta)}<br>`;
-                html += `<b>${escapeHtml(data.bond_type_ru)}</b><br>`;
+                const bondType = data['bond_type_' + currentLang] || data.bond_type_text || data.bond_type || '';
+                html += `<b>${escapeHtml(bondType)}</b><br>`;
                 out.innerHTML = html;
             } else out.innerHTML = `<span style="color:red">Error: ${escapeHtml(data.detail)}</span>`;
         } catch (e) { out.innerHTML = "API Connection Error"; }
@@ -2266,7 +2267,8 @@
                 const ruleKey = 'rule_' + currentLang;
                 const rule = data[ruleKey] || data.rule || '';
                 let html = `<b>Solubility: ${escapeHtml(data.compound)}</b><br>`;
-                html += `<b>${escapeHtml(data.solubility_ru)}</b><br>`;
+                const solubility = data['solubility_' + currentLang] || data.solubility_text || data.solubility || '';
+                html += `<b>${escapeHtml(solubility)}</b><br>`;
                 html += `<i>${escapeHtml(rule)}</i><br>`;
                 out.innerHTML = html;
             } else out.innerHTML = `<span style="color:red">Error: ${escapeHtml(data.detail)}</span>`;

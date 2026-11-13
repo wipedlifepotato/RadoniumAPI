@@ -73,7 +73,7 @@ A web application for molecular analysis, chemoinformatics, and synthesis planni
 - Element click: spdf electron configuration, valence electron spins, ion color, toxicity, bioavailability
 - Dobereiner-Mendeleev triads rule
 - Category filters
-- Multilingual: Russian, English, Ukrainian, Spanish
+- Multilingual: English (default), Russian, Ukrainian, Spanish
 - Access: http://localhost:1235/periodatic_table
 - Typical minerals
 
@@ -207,7 +207,7 @@ Configured via `config.ini` or command-line arguments. CLI arguments take priori
 - Клик по элементу: электронная конфигурация (spdf), спины валентных электронов, цвет иона, токсичность, биодоступность
 - Правило триад (Дёберейнер — Менделеев)
 - Фильтры по категориям элементов
-- Мультиязычность: русский, английский, украинский, испанский
+- Мультиязычность: английский (по умолчанию), русский, украинский, испанский
 - Доступ: http://localhost:1235/periodatic_table
 - Типичные минералы
 
