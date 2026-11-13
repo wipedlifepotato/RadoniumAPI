@@ -3,7 +3,6 @@ molmass
 uvicorn
 fastapi
 PySocks
-sockshandler
 pydantic
 pyOpenMS
 httpx
