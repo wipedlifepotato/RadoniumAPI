@@ -59,26 +59,26 @@ app.mount(
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def serve_index():
-    """Отдаёт основной JSME-клиент по корневому пути."""
+    """Serve the main JSME client at the root path."""
     index_path = os.path.join(
         os.path.dirname(__file__), "StaticFiles", "index_jsme.html"
     )
     if os.path.exists(index_path):
         with open(index_path, "r", encoding="utf-8") as f:
             return f.read()
-    return "<h1>SMILES API Rdkit</h1><p>index_jsme.html не найден</p>"
+    return f"<h1>SMILES API Rdkit</h1><p>{get_text('index_not_found')}</p>"
 
 
 @app.get("/periodatic_table", response_class=HTMLResponse, include_in_schema=False)
 async def serve_periodatic_table():
-    """Отдаёт периодическую таблицу элементов."""
+    """Serve the periodic table of the elements."""
     table_path = os.path.join(
         os.path.dirname(__file__), "StaticFiles", "periodic_table.html"
     )
     if os.path.exists(table_path):
         with open(table_path, "r", encoding="utf-8") as f:
             return f.read()
-    return "<h1>Периодическая таблица</h1><p>periodic_table.html не найден</p>"
+    return f"<h1>{get_text('periodic_table_title')}</h1><p>{get_text('periodic_table_not_found')}</p>"
 
 
 app.add_middleware(
@@ -348,27 +348,27 @@ def name_to_smiles(
     db: Session = Depends(get_db),
 ):
     """
-    Конвертирует название молекулы (IUPAC или тривиальное) в SMILES.
+    Convert a molecule name (IUPAC or trivial) to SMILES.
 
-    Использует OPSIN API (https://opsin.ch.cam.ac.uk) для конвертации
-    названий в SMILES. При неудаче использует Cactus (NCI/NIH).
-    Результаты кешируются в SQLite для ускорения повторных запросов.
+    Uses the OPSIN API (https://opsin.ch.cam.ac.uk) to convert names to
+    SMILES. Falls back to Cactus (NCI/NIH) when that fails. Results are
+    cached in SQLite to speed up repeated requests.
 
-    **Параметры:**
-    - `name` — название молекулы (например, "Aspirin", "2-acetoxybenzoic acid")
-    - `lang` — язык ответа (ru, en, uk, es)
+    **Parameters:**
+    - `name` — molecule name (for example, "Aspirin", "2-acetoxybenzoic acid")
+    - `lang` — response language (en, ru, uk, es)
 
-    **Возвращает:**
-    - `name` — исходное название
-    - `smiles` — полученный SMILES
-    - `source` — источник результата ("opsin", "cactus" или "cache")
+    **Returns:**
+    - `name` — original name
+    - `smiles` — resulting SMILES
+    - `source` — result source ("opsin", "cactus" or "cache")
 
-    **Пример запроса:**
+    **Example request:**
     ```
-    GET /api/name_to_smiles?name=Aspirin&lang=ru
+    GET /api/name_to_smiles?name=Aspirin&lang=en
     ```
 
-    **Пример ответа:**
+    **Example response:**
     ```json
     {
         "name": "Aspirin",
@@ -377,8 +377,8 @@ def name_to_smiles(
     }
     ```
 
-    **Примечание:**
-    При повторном запросе того же названия результат будет взят из кеша.
+    **Note:**
+    Repeated requests for the same name are served from the cache.
     """
     if not name.strip():
         raise HTTPException(status_code=400, detail=get_text("empty_name", lang))
@@ -472,8 +472,8 @@ PUBCHEM_VIEW_URL = "https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound
 
 def extract_ghs_hazards(data: dict) -> list:
     """
-    Рекурсивно обходит весь JSON-ответ PubChem 
-    и собирает все уникальные строки GHS Hazard Statements.
+    Recursively walk the entire PubChem JSON response
+    and collect every unique GHS Hazard Statement string.
     """
     hazards = set()
 
@@ -497,10 +497,10 @@ def extract_ghs_hazards(data: dict) -> list:
 
 def _get_pubchem_data(url: str, use_proxy: bool = True) -> dict:
     """
-    Выполняет HTTP GET запрос к PubChem API с поддержкой SOCKS5 прокси.
-    
-    Использует тот же подход, что и для Cactus (PySocks + sockshandler).
-    При неудаче с прокси — fallback на прямое подключение.
+    Perform an HTTP GET request to the PubChem API with SOCKS5 proxy support.
+
+    Uses the same approach as the Cactus lookup (PySocks + sockshandler).
+    Falls back to a direct connection when the proxy fails.
     """
     import socks
     from sockshandler import SocksiPyHandler
@@ -533,26 +533,26 @@ def check_toxicity_via_pubchem(
 ):
     """
     Check molecule toxicity through the PubChem API.
-    
-    Использует PubChem PUG REST API для:
-    1. Поиска CID (Compound ID) по SMILES
-    2. Получения GHS Classification ( Hazard Statements )
-    
-    Результаты кешируются в SQLite для ускорения повторных запросов.
-    
-    **Параметры:**
-    - `smiles` — строка SMILES молекулы
-    - `lang` — язык ответа (ru, en, uk, es)
-    
-    **Возвращает:**
+
+    Uses the PubChem PUG REST API to:
+    1. Find the CID (Compound ID) by SMILES
+    2. Fetch the GHS Classification (Hazard Statements)
+
+    Results are cached in SQLite to speed up repeated requests.
+
+    **Parameters:**
+    - `smiles` — molecule SMILES string
+    - `lang` — response language (en, ru, uk, es)
+
+    **Returns:**
     - `pubchem_cid` — PubChem Compound ID
-    - `high_toxicity_risk` — флаг высокого риска
-    - `hazard_statements` — список hazard statements
-    - `source` — источник данных ("cache" или "pubchem")
-    
-    **Пример запроса:**
+    - `high_toxicity_risk` — high-risk flag
+    - `hazard_statements` — list of hazard statements
+    - `source` — data source ("cache" or "pubchem")
+
+    **Example request:**
     ```
-    GET /api/pubchem_toxicity?smiles=CC(=O)Oc1ccccc1C(=O)O&lang=ru
+    GET /api/pubchem_toxicity?smiles=CC(=O)Oc1ccccc1C(=O)O&lang=en
     ```
     """
     # Проверяем кеш в БД
@@ -635,24 +635,24 @@ def combined_toxicity_assessment(
 ):
     """
     Combined toxicity assessment: RDKit (Brenk/PAINS) + PubChem (GHS).
-    
-    Объединяет результаты из двух источников:
+
+    Merges results from two sources:
     - RDKit FilterCatalog (Brenk filters, PAINS)
     - PubChem GHS Classification (Hazard Statements)
-    
-    **Параметры:**
-    - `smiles` — строка SMILES молекулы
-    - `lang` — язык ответа (ru, en, uk, es)
-    
-    **Возвращает:**
-    - `rdkit_alerts` — алерты от RDKit
-    - `pubchem_ghs` — hazard statements от PubChem
-    - `overall_risk` — общая оценка риска (HIGH/MEDIUM/LOW)
-    - `high_toxicity_risk` — флаг высокого риска от PubChem
-    
-    **Пример запроса:**
+
+    **Parameters:**
+    - `smiles` — molecule SMILES string
+    - `lang` — response language (en, ru, uk, es)
+
+    **Returns:**
+    - `rdkit_alerts` — alerts from RDKit
+    - `pubchem_ghs` — hazard statements from PubChem
+    - `overall_risk` — overall risk estimate (HIGH/MEDIUM/LOW)
+    - `high_toxicity_risk` — high-risk flag from PubChem
+
+    **Example request:**
     ```
-    GET /api/combined_toxicity?smiles=CC(=O)Oc1ccccc1C(=O)O&lang=ru
+    GET /api/combined_toxicity?smiles=CC(=O)Oc1ccccc1C(=O)O&lang=en
     ```
     """
     # Получаем данные от RDKit

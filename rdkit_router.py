@@ -1,6 +1,4 @@
-"""
-Enhanced RDKit API Router — расширенный функционал хемоинформатики
-"""
+"""Enhanced RDKit API Router — extended cheminformatics functionality."""
 
 from fastapi import APIRouter, HTTPException, Query, Depends, Response
 from fastapi.responses import HTMLResponse
@@ -39,7 +37,7 @@ PROXY_ADDRESS = "127.0.0.1:9050"
 
 @router.get("/", include_in_schema=False)
 async def rdkit_index(lang: str = Depends(get_lang)):
-    """Индексная страница RDKit API со списком всех эндпоинтов."""
+    """RDKit API index page listing all endpoints."""
     endpoints = {
         get_text("rdkit_index_adme", lang): {
             "GET /rdkit/api/adme": get_text("ep_adme_desc", lang),
@@ -73,7 +71,7 @@ async def rdkit_index(lang: str = Depends(get_lang)):
 
 
 def _optimize_and_energy(mol, conf_id):
-    """Оптимизация конформера: MMFF, а если параметров нет — UFF. Возвращает энергию (ккал/моль)."""
+    """Optimize a conformer with MMFF, falling back to UFF when parameters are unavailable. Returns the energy in kcal/mol."""
     if AllChem.MMFFHasAllMoleculeParams(mol):
         AllChem.MMFFOptimizeMolecule(mol, confId=conf_id, maxIters=2000)
         props = AllChem.MMFFGetMoleculeProperties(mol)
@@ -119,18 +117,18 @@ class ADMEResponse(BaseModel):
 
 
 @router.get(
-    "/adme", response_model=ADMEResponse, summary="ADME / Drug-likeness свойства"
+    "/adme", response_model=ADMEResponse, summary=get_text("ep_adme_desc")
 )
 def get_adme_properties(
     smiles: str = Query(..., description=get_text("param_smiles")),
     lang: str = Depends(get_lang),
 ):
     """
-    Полный набор ADME-свойств и оценки drug-likeness:
-    - Правило Липинского (Rule of Five)
+    Full set of ADME properties and drug-likeness scores:
+    - Lipinski Rule of Five
     - QED (Quantitative Estimate of Drug-likeness)
     - SA Score (Synthetic Accessibility)
-    - Базовые дескрипторы
+    - Basic descriptors
     """
     try:
         m = Molecule(smiles)
@@ -247,14 +245,14 @@ FUNCTIONAL_GROUPS = {
 }
 
 
-@router.get("/functional_groups", summary="Поиск функциональных групп")
+@router.get("/functional_groups", summary=get_text("ep_functional_groups_desc"))
 def find_functional_groups(
     smiles: str = Query(..., description=get_text("param_smiles")),
     lang: str = Depends(get_lang),
 ):
     """
-    Определяет наличие функциональных групп в молекуле по SMARTS-паттернам.
-    Возвращает список найденных групп с количеством совпадений.
+    Detect functional groups in a molecule using SMARTS patterns.
+    Returns the matched groups together with their counts.
     """
     try:
         m = Molecule(smiles)
@@ -293,16 +291,16 @@ def find_functional_groups(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@router.get("/validate", summary="Валидация SMILES с подробной диагностикой")
+@router.get("/validate", summary=get_text("ep_validate_desc"))
 def validate_smiles(
     smiles: str = Query(..., description=get_text("param_smiles_to_validate")),
     lang: str = Depends(get_lang),
 ):
     """
-    Проверяет корректность SMILES и возвращает подробную диагностику:
-    - Тип ошибки (valence, aromaticity, syntax)
-    - Позицию ошибки
-    - Предложения по исправлению
+    Validate a SMILES string and return detailed diagnostics:
+    - error type (valence, aromaticity, syntax)
+    - error position
+    - suggested fixes
     """
     result = {
         "smiles": smiles,
@@ -405,15 +403,15 @@ def validate_smiles(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@router.get("/reaction", summary="Применение реакции (SMIRKS)")
+@router.get("/reaction", summary=get_text("ep_reaction_desc"))
 def apply_reaction(
     smiles: str = Query(..., description=get_text("param_smiles_reagent")),
     reaction_smarts: str = Query(..., description=get_text("param_reaction_smarts")),
     lang: str = Depends(get_lang),
 ):
     """
-    Применяет реакцию (SMIRKS) к молекуле.
-    Возвращает список продуктов реакции.
+    Apply a reaction (SMIRKS) to a molecule.
+    Returns the list of reaction products.
     """
     try:
         mol = Chem.MolFromSmiles(smiles)
@@ -463,14 +461,14 @@ def apply_reaction(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@router.get("/pka", summary="Оценка pKa молекулы")
+@router.get("/pka", summary=get_text("ep_pka_desc"))
 def estimate_pka(
     smiles: str = Query(..., description=get_text("param_smiles")),
     lang: str = Depends(get_lang),
 ):
     """
-    Оценивает кислотные/основные центры молекулы.
-    Использует эвристический подход на основе функциональных групп.
+    Estimate the acidic and basic centres of a molecule.
+    Uses a heuristic approach based on functional groups.
     """
     try:
         m = Molecule(smiles)
@@ -522,7 +520,7 @@ def estimate_pka(
                     }
                 )
 
-        # Анилины (pKa ~4-5)
+        # Anilines (pKa ~4-5)
         aniline_pattern = Chem.MolFromSmarts("[NX3;H2,H1]c1ccccc1")
         if aniline_pattern:
             for match in mol.GetSubstructMatches(aniline_pattern):
@@ -550,7 +548,7 @@ def estimate_pka(
                     }
                 )
 
-        # Сульфоновые кислоты (pKa ~-2)
+        # Sulfonic acids (pKa ~-2)
         sulfonic_pattern = Chem.MolFromSmarts("[SX4](=[OX1])(=[OX1])[OX2H1]")
         if sulfonic_pattern:
             for match in mol.GetSubstructMatches(sulfonic_pattern):
@@ -587,11 +585,11 @@ class BatchRequest(BaseModel):
     properties: Optional[List[str]] = None  # Если None — все свойства
 
 
-@router.post("/batch", summary="Пакетный анализ молекул")
+@router.post("/batch", summary=get_text("ep_batch_desc"))
 def batch_analyze(request: BatchRequest, lang: str = Depends(get_lang)):
     """
-    Анализирует список SMILES за один запрос.
-    Возвращает свойства для каждой молекулы.
+    Analyze a list of SMILES strings in a single request.
+    Returns the properties of every molecule.
     """
     results = []
     for smiles in request.smiles_list:
@@ -651,14 +649,14 @@ def batch_analyze(request: BatchRequest, lang: str = Depends(get_lang)):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@router.get("/by_inchikey", summary="Получить свойства по InChIKey")
+@router.get("/by_inchikey", summary=get_text("ep_by_inchikey_desc"))
 def get_by_inchikey(
     inchikey: str = Query(..., description=get_text("param_inchikey")),
     lang: str = Depends(get_lang),
 ):
     """
-    Получает свойства молекулы по InChIKey.
-    Использует Cactus/NCI resolver для конвертации.
+    Retrieve molecule properties by InChIKey.
+    Uses the Cactus/NCI resolver for conversion.
     """
     try:
         # Проверка формата InChIKey
@@ -712,14 +710,14 @@ def get_by_inchikey(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@router.get("/descriptors", summary="Все дескрипторы RDKit")
+@router.get("/descriptors", summary=get_text("ep_descriptors_desc"))
 def get_all_descriptors(
     smiles: str = Query(..., description=get_text("param_smiles")),
     lang: str = Depends(get_lang),
 ):
     """
-    Возвращает все доступные дескрипторы RDKit для молекулы.
-    Включает 200+ молекулярных дескрипторов.
+    Return every available RDKit descriptor for a molecule.
+    Includes more than 200 molecular descriptors.
     """
     try:
         m = Molecule(smiles)
@@ -859,7 +857,7 @@ _HYBRIDIZATION_LABELS = {
 
 
 def _hybridization_label(atom) -> str:
-    """Название гибридизации атома в привычной записи (sp, sp², sp³...)."""
+    """Conventional label for the hybridization of an atom (sp, sp2, sp3, ...)."""
     hybrid = atom.GetHybridization()
     # RDKit иногда помечает ароматический бор как sp из-за валентности.
     # В ароматическом цикле такой атом фактически sp².
@@ -874,7 +872,7 @@ def _hybridization_label(atom) -> str:
 
 
 def _atom_total_valence(atom) -> int:
-    """Полная валентность атома с учётом неявных водородов."""
+    """Total valence of an atom, including implicit hydrogens."""
     try:
         explicit = int(atom.GetValence(rdchem.ValenceType.EXPLICIT))
         return explicit + int(atom.GetNumImplicitHs())
@@ -886,7 +884,7 @@ def _atom_total_valence(atom) -> int:
 
 
 def _atom_lone_pairs(atom):
-    """Оценка числа неподелённых электронных пар на атоме."""
+    """Estimate the number of lone electron pairs on an atom."""
     valence_electrons = _VALENCE_ELECTRONS.get(atom.GetAtomicNum())
     if valence_electrons is None:
         return None
@@ -900,7 +898,7 @@ def _atom_lone_pairs(atom):
 
 
 def _atom_has_multiple_bond(atom) -> bool:
-    """Есть ли у атома кратная связь (включая ароматическую)."""
+    """Whether the atom has a multiple bond (including aromatic bonds)."""
     for bond in atom.GetBonds():
         if bond.GetIsAromatic() or bond.GetBondType() in (
             Chem.BondType.DOUBLE,
@@ -911,7 +909,7 @@ def _atom_has_multiple_bond(atom) -> bool:
 
 
 def _atom_has_p_orbital(atom) -> bool:
-    """Может ли атом участвовать в π-системе через p-орбиталь."""
+    """Whether the atom can participate in a pi system through a p orbital."""
     if atom.GetIsAromatic():
         return True
     if atom.GetHybridization() in (
@@ -923,7 +921,7 @@ def _atom_has_p_orbital(atom) -> bool:
 
 
 def _kekulized_copy(mol):
-    """Копия молекулы с явными двойными связями (для подсчёта π-электронов)."""
+    """Copy of the molecule with explicit double bonds (for pi-electron counting)."""
     kekulized = Chem.Mol(mol)
     try:
         Chem.Kekulize(kekulized, clearAromaticFlags=True)
@@ -934,7 +932,7 @@ def _kekulized_copy(mol):
 
 
 def _has_internal_multiple_bond(kekulized_mol, atom_idx: int, atom_set) -> bool:
-    """Есть ли у атома кратная связь с другим атомом из того же цикла."""
+    """Whether the atom has a multiple bond to another atom in the same ring."""
     try:
         atom = kekulized_mol.GetAtomWithIdx(atom_idx)
     except Exception:
@@ -948,15 +946,15 @@ def _has_internal_multiple_bond(kekulized_mol, atom_idx: int, atom_set) -> bool:
 
 def _atom_pi_contribution(atom, kekulized_mol, atom_set):
     """
-    Вклад атома в π-систему (0, 1 или 2 электрона).
+    Contribution of an atom to the pi system (0, 1 or 2 electrons).
 
-    Возвращает (число π-электронов, код состояния p-орбитали):
-      bond        — атом участвует в кратной связи (p¹);
-      lone_pair   — неподелённая пара в p-орбитали (p²);
-      radical     — неспаренный электрон (p¹);
-      empty       — пустая p-орбиталь (p⁰);
-      exocyclic   — p-орбиталь занята экзоциклической кратной связью;
-      none        — p-орбитали нет / атом не участвует.
+    Returns (number of pi electrons, p-orbital state code):
+      bond        — the atom takes part in a multiple bond (p1);
+      lone_pair   — a lone pair occupies the p orbital (p2);
+      radical     — an unpaired electron (p1);
+      empty       — an empty p orbital (p0);
+      exocyclic   — the p orbital is used by an exocyclic multiple bond;
+      none        — no p orbital / the atom does not participate.
     """
     if not _atom_has_p_orbital(atom):
         return 0, "none"
@@ -994,8 +992,8 @@ def _atom_pi_contribution(atom, kekulized_mol, atom_set):
 
 def _ring_systems(mol):
     """
-    Объединяет SSSR-циклы в циклические системы (фузионные циклы — вместе).
-    Возвращает список множеств индексов атомов.
+    Merge SSSR rings into ring systems (fused rings stay together).
+    Returns a list of atom-index sets.
     """
     rings = [set(ring) for ring in mol.GetRingInfo().AtomRings()]
     if not rings:
@@ -1027,7 +1025,7 @@ def _ring_systems(mol):
 
 
 def _huckel_status(pi_electrons: int, conjugated: bool) -> dict:
-    """Проверка простого правила Хюккеля 4n+2 для циклической системы."""
+    """Check the simple Huckel 4n+2 rule for a ring system."""
     if not conjugated:
         return {
             "is_huckel_aromatic": False,
@@ -1061,24 +1059,23 @@ def _huckel_status(pi_electrons: int, conjugated: bool) -> dict:
 
 @router.get(
     "/huckel",
-    summary="Гибридизация, π-электроны и ароматичность (правило Хюккеля)",
+    summary=get_text("ep_hybridization_desc"),
 )
 def analyze_huckel_aromaticity(
     smiles: str = Query(..., description=get_text("param_smiles")),
     lang: str = Depends(get_lang),
 ):
     """
-    Анализ гибридизации атомов, π-электронов и ароматичности циклов.
+    Analyze atom hybridization, pi electrons and ring aromaticity.
 
-    Для каждого тяжёлого атома возвращает гибридизацию (sp/sp²/sp³...),
-    формальный заряд, число неподелённых пар, вклад в π-систему и
-    состояние p-орбитали. Для каждой циклической системы (фузионные
-    циклы объединяются) считает число π-электронов и проверяет правило
-    Хюккеля 4n+2. Дополнительно показывает ароматичность по RDKit.
+    For every heavy atom, return its hybridization (sp/sp2/sp3, ...), formal
+    charge, number of lone pairs, pi-system contribution and p-orbital state.
+    For every ring system (fused rings are merged), count the pi electrons and
+    check the Huckel 4n+2 rule. RDKit aromaticity is reported as well.
 
-    **Пример запроса:**
+    **Example request:**
     ```
-    GET /rdkit/api/huckel?smiles=c1cc[nH]c1&lang=ru
+    GET /rdkit/api/huckel?smiles=c1cc[nH]c1&lang=en
     ```
     """
     try:
@@ -1218,15 +1215,15 @@ def analyze_huckel_aromaticity(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@router.get("/3d", summary="3D-структура молекулы")
+@router.get("/3d", summary=get_text("ep_3d_desc"))
 def get_3d_structure(
     smiles: str = Query(..., description=get_text("param_smiles")),
     format: str = Query("sdf", description=get_text("param_format")),
     lang: str = Depends(get_lang),
 ):
     """
-    Генерирует 3D-структуру молекулы.
-    Возвращает в формате SDF, MOL или PDB.
+    Generate the 3D structure of a molecule.
+    Returns it in SDF, MOL or PDB format.
     """
     try:
         m = Molecule(smiles)
@@ -1269,13 +1266,13 @@ class MoleculeEntry(BaseModel):
     tags: Optional[List[str]] = None
 
 
-@router.post("/library/save", summary="Сохранить молекулу в библиотеку")
+@router.post("/library/save", summary=get_text("ep_library_save_desc"))
 def save_to_library(
     entry: MoleculeEntry,
     lang: str = Depends(get_lang),
     db: Session = Depends(get_db),
 ):
-    """Сохраняет молекулу в локальную библиотеку (SQLite)."""
+    """Save a molecule to the local library (SQLite)."""
     try:
         m = Molecule(entry.smiles)
         if m.m is None:
@@ -1300,13 +1297,13 @@ def save_to_library(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/library", summary="Список молекул в библиотеке")
+@router.get("/library", summary=get_text("ep_library_desc"))
 def list_library(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
-    """Возвращает список сохранённых молекул."""
+    """Return the list of saved molecules."""
     try:
         entries = db.query(CachedName).offset(offset).limit(limit).all()
         total = db.query(CachedName).count()
@@ -1320,13 +1317,13 @@ def list_library(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.delete("/library/{smiles}", summary="Удалить молекулу из библиотеки")
+@router.delete("/library/{smiles}", summary=get_text("ep_library_delete_desc"))
 def delete_from_library(
     smiles: str,
     lang: str = Depends(get_lang),
     db: Session = Depends(get_db),
 ):
-    """Удаляет молекулу из библиотеки по SMILES."""
+    """Delete a molecule from the library by SMILES."""
     try:
         entry = db.query(CachedName).filter(CachedName.smiles == smiles).first()
         if not entry:
@@ -1346,14 +1343,14 @@ def delete_from_library(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@router.post("/compare", summary="Сравнение нескольких молекул")
+@router.post("/compare", summary=get_text("ep_compare_desc"))
 def compare_molecules(
     smiles_list: List[str] = Query(..., description=get_text("param_smiles_list")),
     lang: str = Depends(get_lang),
 ):
     """
-    Сравнивает несколько молекул попарно.
-    Возвращает матрицу сходства Tanimoto.
+    Compare several molecules pairwise.
+    Returns a Tanimoto similarity matrix.
     """
     try:
         mols = []
@@ -1385,7 +1382,7 @@ def compare_molecules(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@router.get("/render_highlighted", summary="Рендеринг с подсветкой групп")
+@router.get("/render_highlighted", summary=get_text("ep_render_highlighted_desc"))
 def render_highlighted(
     smiles: str = Query(..., description=get_text("param_smiles")),
     highlight_groups: Optional[List[str]] = Query(
@@ -1393,9 +1390,7 @@ def render_highlighted(
     ),
     lang: str = Depends(get_lang),
 ):
-    """
-    Рендерит молекулу с подсветкой функциональных групп.
-    """
+    """Render a molecule with functional groups highlighted."""
     try:
         m = Molecule(smiles)
         if m.m is None:
@@ -1446,55 +1441,16 @@ def render_highlighted(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ЯМР (1H и 13C) — эвристическая оценка
+# NMR (1H and 13C) — heuristic estimate
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-# Таблицы химических сдвигов для 1H ЯМР (ppm)
-NMR_1H_SHIFTS = {
-    "methyl": {"range": (0.8, 1.2), "desc": "CH3 (метил)"},
-    "methylene": {"range": (1.2, 1.5), "desc": "CH2 (метилен)"},
-    "methine": {"range": (1.4, 1.7), "desc": "CH (метин)"},
-    "allylic": {"range": (1.6, 2.6), "desc": "Аллильный CH"},
-    "alpha_to_carbonyl": {"range": (2.0, 2.5), "desc": "CH рядом с C=O"},
-    "alkyne": {"range": (2.0, 3.0), "desc": "Ацетиленовый CH"},
-    "methoxy": {"range": (3.3, 4.0), "desc": "OCH3 (метокси)"},
-    "alpha_to_oxygen": {"range": (3.3, 4.5), "desc": "CH рядом с O"},
-    "alkene": {"range": (4.5, 6.5), "desc": "Алкеновый CH"},
-    "aromatic": {"range": (6.5, 8.5), "desc": "Ароматический CH"},
-    "aldehyde": {"range": (9.0, 10.0), "desc": "Альдегидный CH"},
-    "carboxylic_acid": {"range": (10.0, 13.0), "desc": "COOH (карбоновая кислота)"},
-    "phenol": {"range": (4.5, 7.0), "desc": "OH (фенол)"},
-    "amine": {"range": (1.0, 5.0), "desc": "NH (амин)"},
-}
-
-# Таблицы химических сдвигов для 13C ЯМР (ppm)
-NMR_13C_SHIFTS = {
-    "methyl": {"range": (5, 30), "desc": "CH3 (метил)"},
-    "methylene": {"range": (15, 45), "desc": "CH2 (метилен)"},
-    "methine": {"range": (25, 50), "desc": "CH (метин)"},
-    "alkyne": {"range": (65, 90), "desc": "C≡C (ацетилен)"},
-    "alkene": {"range": (100, 150), "desc": "C=C (алкен)"},
-    "aromatic": {"range": (110, 160), "desc": "Ароматический C"},
-    "carbonyl_ester": {"range": (160, 175), "desc": "C=O (сложный эфир)"},
-    "carbonyl_amide": {"range": (160, 180), "desc": "C=O (амид)"},
-    "carbonyl_ketone": {"range": (190, 220), "desc": "C=O (кетон, альдегид)"},
-    "nitrile": {"range": (115, 125), "desc": "C≡N (нитрил)"},
-}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ЯМР (1H и 13C) — улучшенная эвристическая оценка
-# ─────────────────────────────────────────────────────────────────────────────
-
-@router.get("/nmr", summary="Оценка химических сдвигов ЯМР (1H и 13C)")
+@router.get("/nmr", summary=get_text("ep_nmr_desc"))
 def estimate_nmr(
     smiles: str = Query(..., description=get_text("param_smiles")),
     lang: str = Depends(get_lang),
 ):
-    """
-    Эвристическая оценка химических сдвигов ЯМР с учетом химического окружения.
-    """
+    """Heuristic estimate of NMR chemical shifts that takes the chemical environment into account."""
     try:
         m = Molecule(smiles)
         if m.m is None:
@@ -1577,8 +1533,8 @@ def estimate_nmr(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-def _estimate_13c_shift_improved(mol, c_atom, lang="ru"):
-    """Точная оценка сдвига для 13C ЯМР."""
+def _estimate_13c_shift_improved(mol, c_atom, lang="en"):
+    """Refined chemical-shift estimate for 13C NMR."""
     c_idx = c_atom.GetIdx()
     
     # Проверяем карбонильные группы
@@ -1606,138 +1562,21 @@ def _estimate_13c_shift_improved(mol, c_atom, lang="ru"):
     else:
         return {"range": [25, 60], "desc": get_text("nmr_ch_methine_quaternary", lang)}
 
-def _estimate_1h_shift(mol, h_atom, heavy_atom):
-    """Оценка химического сдвига протона."""
-    heavy_sym = heavy_atom.GetSymbol()
-    heavy_idx = heavy_atom.GetIdx()
-
-    # Проверяем окружение тяжёлого атома
-    if heavy_sym == "C":
-        # Проверяем, является ли углерод карбонильным
-        for neighbor in heavy_atom.GetNeighbors():
-            if neighbor.GetAtomicNum() == 8 and mol.GetBondBetweenAtoms(
-                heavy_idx, neighbor.GetIdx()
-            ).GetBondType() == Chem.BondType.DOUBLE:
-                return NMR_1H_SHIFTS["alpha_to_carbonyl"]
-
-        # Проверяем ароматичность
-        if heavy_atom.GetIsAromatic():
-            return NMR_1H_SHIFTS["aromatic"]
-
-        # Проверяем алкены
-        for neighbor in heavy_atom.GetNeighbors():
-            if mol.GetBondBetweenAtoms(
-                heavy_idx, neighbor.GetIdx()
-            ).GetBondType() == Chem.BondType.DOUBLE:
-                return NMR_1H_SHIFTS["alkene"]
-
-        # Определяем тип углерода по числу соседей
-        num_h_neighbors = sum(1 for n in heavy_atom.GetNeighbors() if n.GetAtomicNum() == 1)
-        if num_h_neighbors >= 3:
-            return NMR_1H_SHIFTS["methyl"]
-        elif num_h_neighbors == 2:
-            return NMR_1H_SHIFTS["methylene"]
-        else:
-            return NMR_1H_SHIFTS["methine"]
-
-    elif heavy_sym == "O":
-        # Проверяем, является ли кислород частью карбоновой кислоты
-        for neighbor in heavy_atom.GetNeighbors():
-            if neighbor.GetAtomicNum() == 6:
-                for n2 in neighbor.GetNeighbors():
-                    if n2.GetAtomicNum() == 8 and mol.GetBondBetweenAtoms(
-                        neighbor.GetIdx(), n2.GetIdx()
-                    ).GetBondType() == Chem.BondType.DOUBLE:
-                        return NMR_1H_SHIFTS["carboxylic_acid"]
-        # Проверяем фенол
-        if heavy_atom.GetIsAromatic():
-            return NMR_1H_SHIFTS["phenol"]
-        return NMR_1H_SHIFTS["phenol"]
-
-    elif heavy_sym == "N":
-        return NMR_1H_SHIFTS["amine"]
-
-    return None
-
-def _estimate_multiplicity(h_atom, heavy_atom):
-    """Оценка мультиплетности (n+1 правило)."""
-    # Считаем соседние протоны на соседних атомах
-    n_protons = 0
-    for neighbor in heavy_atom.GetNeighbors():
-        if neighbor.GetIdx() == h_atom.GetIdx():
-            continue
-        if neighbor.GetAtomicNum() == 1:
-            n_protons += 1
-        elif neighbor.GetAtomicNum() == 6:
-            # Считаем протоны на соседнем углероде
-            for n2 in neighbor.GetNeighbors():
-                if n2.GetAtomicNum() == 1:
-                    n_protons += 1
-
-    if n_protons == 0:
-        return "s"  # Синглет
-    elif n_protons == 1:
-        return "d"  # Дублет
-    elif n_protons == 2:
-        return "t"  # Триплет
-    elif n_protons == 3:
-        return "q"  # Квартет
-    else:
-        return "m"  # Мультиплет
-
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Токсичность (ADMET)
+# Toxicity (ADMET)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-# Структуры, связанные с токсичностью
-TOXICITY_ALERTS = {
-    "hERG": {
-        "name": "hERG Channel Blockade",
-        "description": "Блокирование калиевых каналов hERG — кардиотоксичность",
-        "smarts": [
-            {"pattern": "[NX3;H2,H1;!$(NC=O)]", "desc": "Основные амины"},
-            {"pattern": "[NX3;H2,H1]c1ccccc1", "desc": "Анилины"},
-            {"pattern": "c1ccc2c(c1)ccc2", "desc": "Полициклические ароматические углеводороды"},
-        ],
-        "risk": "Высокий риск удлинения интервала QT",
-    },
-    "ames": {
-        "name": "Ames Test (Mutagenicity)",
-        "description": "Мутагенность — повреждение ДНК",
-        "smarts": [
-            {"pattern": "[NX2]=[NX2]=[NX1]", "desc": "Азиды"},
-            {"pattern": "[NX3](=[OX1])(=[OX1])", "desc": "Нитросоединения"},
-            {"pattern": "[CX3](=O)[NX2][CX3](=O)", "desc": "Диамиды"},
-            {"pattern": "[SX4](=[OX1])(=[OX1])[OX2H1]", "desc": "Сульфоновые кислоты"},
-            {"pattern": "[Cl,Br,I][CX4]", "desc": "Галогеналканы"},
-        ],
-        "risk": "Потенциальные мутагены",
-    },
-    "hepatotoxicity": {
-        "name": "Hepatotoxicity",
-        "description": "Токсичность для печени",
-        "smarts": [
-            {"pattern": "[NX3;H2]c1ccccc1", "desc": "Анилины"},
-            {"pattern": "[CX3](=O)[NX2][CX3](=O)", "desc": "Диамиды"},
-            {"pattern": "[SX4](=[OX1])(=[OX1])[NX3]", "desc": "Сульфонамиды"},
-            {"pattern": "[PX4](=[OX1])([OX2])[OX2]", "desc": "Фосфаты"},
-        ],
-        "risk": "Потенциальная гепатотоксичность",
-    },
-}
-
-
-@router.get("/toxicity", summary="Оценка токсичности через каталоги RDKit (Brenk / PAINS)")
+@router.get("/toxicity", summary=get_text("ep_toxicity_desc"))
 def assess_toxicity(
     smiles: str = Query(..., description=get_text("param_smiles")),
     lang: str = Depends(get_lang),
 ):
     """
-    Оценка потенциальной токсичности молекулы через FilterCatalog RDKit:
-    - Brenk filters (нежелательные фрагменты для лекарств)
-    - PAINS (пан-ассайные интерферирующие вещества)
+    Assess the potential toxicity of a molecule with the RDKit FilterCatalog:
+    - Brenk filters (undesirable fragments for drugs)
+    - PAINS (pan-assay interference compounds)
     """
     try:
         m = Molecule(smiles)
@@ -1782,18 +1621,18 @@ def assess_toxicity(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@router.get("/retrosynthesis", summary="Ретросинтетический анализ (RECAP)")
+@router.get("/retrosynthesis", summary=get_text("ep_retrosynthesis_desc"))
 def retrosynthetic_analysis(
     smiles: str = Query(..., description=get_text("param_smiles_target")),
     lang: str = Depends(get_lang),
 ):
     """
-    Ретросинтетический анализ молекулы алгоритмом RECAP
+    Retrosynthetic analysis of a molecule with the RECAP algorithm
     (Retrosynthetic Combinatorial Analysis Procedure).
 
-    Разрывает связи по стандартным правилам (амиды, сложные эфиры,
-    простые эфиры, мочевины, сульфонамиды и т.д.) и возвращает конечные
-    фрагменты-прекурсоры — только листья иерархического дерева декомпозиции.
+    Breaks bonds according to standard rules (amides, esters, ethers,
+    ureas, sulfonamides, etc.) and returns the terminal precursor fragments —
+    only the leaves of the hierarchical decomposition tree.
     """
     try:
         m = Molecule(smiles)
@@ -1853,15 +1692,15 @@ def retrosynthetic_analysis(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@router.get("/conformers", summary="Генерация конформеров молекулы")
+@router.get("/conformers", summary=get_text("ep_conformers_desc"))
 def generate_conformers(
     smiles: str = Query(..., description=get_text("param_smiles")),
     num_conformers: int = Query(10, ge=1, le=50, description=get_text("param_num_conformers")),
     lang: str = Depends(get_lang),
 ):
     """
-    Генерирует несколько энергетически выгодных конформеров молекулы.
-    Использует ETKDG для генерации и MMFF для оптимизации.
+    Generate several low-energy conformers of a molecule.
+    Uses ETKDG for generation and MMFF for optimization.
     """
     try:
         m = Molecule(smiles)
@@ -1921,7 +1760,7 @@ def generate_conformers(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@router.get("/export_svg", summary="Экспорт 2D-структуры в SVG")
+@router.get("/export_svg", summary=get_text("ep_export_svg_desc"))
 def export_svg(
     smiles: str = Query(..., description=get_text("param_smiles")),
     width: int = Query(400, ge=100, le=2000, description=get_text("param_width")),
@@ -1929,8 +1768,8 @@ def export_svg(
     lang: str = Depends(get_lang),
 ):
     """
-    Экспортирует 2D-структуру молекулы в формате SVG.
-    Подходит для вставки в научные публикации.
+    Export the 2D structure of a molecule as SVG.
+    Suitable for inclusion in scientific publications.
     """
     try:
         m = Molecule(smiles)
@@ -1956,14 +1795,12 @@ def export_svg(
 # ─────────────────────────────────────────────────────────────────────────────
 # Масс-спектрометрия (изотопное распределение)
 # ─────────────────────────────────────────────────────────────────────────────
-@router.get("/ms", summary="Масс-спектрометрия (изотопное распределение)")
+@router.get("/ms", summary=get_text("ep_ms_desc"))
 def mass_spectrometry(
     smiles: str = Query(..., description=get_text("param_smiles")),
     lang: str = Depends(get_lang),
 ):
-    """
-    Расчёт ожидаемого масс-спектра и изотопного распределения через pyOpenMS.
-    """
+    """Calculate the expected mass spectrum and isotope distribution with pyOpenMS."""
     try:
         m = Molecule(smiles)
         if m.m is None:
@@ -2000,7 +1837,7 @@ def mass_spectrometry(
         raise HTTPException(status_code=400, detail=str(e))
 
 def _calculate_isotope_pattern(atom_counts, exact_mass):
-    """Расчёт изотопного распределения с использованием pyOpenMS."""
+    """Calculate the isotope distribution with pyOpenMS."""
     try:
         import pyopenms as oms
 
@@ -2040,7 +1877,7 @@ def _calculate_isotope_pattern(atom_counts, exact_mass):
 
 
 def _calculate_isotope_pattern_fallback(atom_counts, exact_mass):
-    """Упрощённый расчёт изотопного распределения (fallback)."""
+    """Simplified isotope-distribution calculation (fallback)."""
     isotopes = {
         "C": [(12.0, 0.989), (13.003, 0.011)],
         "H": [(1.008, 0.9998), (2.014, 0.0002)],
@@ -2084,32 +1921,32 @@ def _calculate_isotope_pattern_fallback(atom_counts, exact_mass):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@router.get("/tautomers", summary="Генерация таутомеров")
+@router.get("/tautomers", summary=get_text("ep_tautomers_desc"))
 def enumerate_tautomers(
     smiles: str = Query(..., description=get_text("param_smiles")),
     lang: str = Depends(get_lang),
 ):
     """
-    Перечисляет все возможные таутомеры молекулы.
+    Enumerate all possible tautomers of a molecule.
 
-    Использует алгоритм TautomerEnumerator из RDKit для генерации
-    всех уникальных таутомерных форм молекулы.
+    Uses the RDKit TautomerEnumerator to generate every unique tautomeric
+    form of the molecule.
 
-    **Параметры:**
-    - `smiles` — строка SMILES молекулы
-    - `lang` — язык ответа (ru, en, uk, es)
+    **Parameters:**
+    - `smiles` — molecule SMILES string
+    - `lang` — response language (en, ru, uk, es)
 
-    **Возвращает:**
-    - `canonical_tautomer` — канонический (наиболее стабильный) таутомер
-    - `tautomers` — список всех уникальных таутомеров в формате SMILES
-    - `count` — количество найденных таутомеров
+    **Returns:**
+    - `canonical_tautomer` — canonical (most stable) tautomer
+    - `tautomers` — list of all unique tautomers as SMILES
+    - `count` — number of tautomers found
 
-    **Пример запроса:**
+    **Example request:**
     ```
-    GET /rdkit/api/tautomers?smiles=CC(=O)C&lang=ru
+    GET /rdkit/api/tautomers?smiles=CC(=O)C&lang=en
     ```
 
-    **Пример ответа:**
+    **Example response:**
     ```json
     {
         "smiles": "CC(=O)C",
@@ -2146,31 +1983,31 @@ def enumerate_tautomers(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@router.get("/scaffold", summary="Выделение скаффолда Bemis-Murcko")
+@router.get("/scaffold", summary=get_text("ep_scaffold_desc"))
 def get_scaffold(
     smiles: str = Query(..., description=get_text("param_smiles")),
     lang: str = Depends(get_lang),
 ):
     """
-    Выделяет каркас Bemis-Murcko из молекулы.
+    Extract the Bemis-Murcko scaffold from a molecule.
 
-    Алгоритм Bemis-Murcko удаляет боковые цепи, оставляя только
-    циклический скелет с связями между циклами.
+    The Bemis-Murcko algorithm removes side chains, leaving only the ring
+    skeleton and the bonds connecting the rings.
 
-    **Параметры:**
-    - `smiles` — строка SMILES молекулы
-    - `lang` — язык ответа (ru, en, uk, es)
+    **Parameters:**
+    - `smiles` — molecule SMILES string
+    - `lang` — response language (en, ru, uk, es)
 
-    **Возвращает:**
-    - `scaffold_smiles` — SMILES скаффолда
-    - `scaffold_svg` — SVG-изображение скаффолда
+    **Returns:**
+    - `scaffold_smiles` — SMILES of the scaffold
+    - `scaffold_svg` — SVG image of the scaffold
 
-    **Пример запроса:**
+    **Example request:**
     ```
-    GET /rdkit/api/scaffold?smiles=CC(=O)Oc1ccccc1C(=O)O&lang=ru
+    GET /rdkit/api/scaffold?smiles=CC(=O)Oc1ccccc1C(=O)O&lang=en
     ```
 
-    **Пример ответа:**
+    **Example response:**
     ```json
     {
         "smiles": "CC(=O)Oc1ccccc1C(=O)O",
@@ -2208,34 +2045,34 @@ def get_scaffold(
 
 
 class ClusterRequest(BaseModel):
-    """Модель запроса для кластеризации молекул."""
+    """Request model for molecule clustering."""
 
-    smiles_list: List[str] = Field(..., description="Список SMILES строк (минимум 2)")
-    cutoff: float = Field(0.7, ge=0.0, le=1.0, description="Порог сходства Tanimoto (0.0–1.0)")
+    smiles_list: List[str] = Field(..., description=get_text("param_smiles_list_cluster"))
+    cutoff: float = Field(0.7, ge=0.0, le=1.0, description=get_text("param_cutoff"))
 
 
-@router.post("/cluster", summary="Кластеризация молекул (Butina)")
+@router.post("/cluster", summary=get_text("ep_cluster_desc"))
 def cluster_molecules(
     request: ClusterRequest,
     lang: str = Depends(get_lang),
 ):
     """
-    Кластеризует молекулы алгоритмом Butina.
+    Cluster molecules with the Butina algorithm.
 
-    Использует Morgan Fingerprints (радиус 2, 2048 бит) и матрицу
-    сходства Tanimoto для группировки молекул по структурному сходству.
+    Uses Morgan fingerprints (radius 2, 2048 bits) and a Tanimoto similarity
+    matrix to group molecules by structural similarity.
 
-    **Параметры запроса (JSON):**
-    - `smiles_list` — список SMILES строк (минимум 2)
-    - `cutoff` — порог сходства Tanimoto (0.0–1.0, по умолчанию 0.7)
+    **Request parameters (JSON):**
+    - `smiles_list` — list of SMILES strings (at least 2)
+    - `cutoff` — Tanimoto similarity threshold (0.0–1.0, default 0.7)
 
-    **Возвращает:**
-    - `total_molecules` — количество валидных молекул
-    - `cutoff` — использованный порог
-    - `cluster_count` — количество кластеров
-    - `clusters` — список кластеров с SMILES
+    **Returns:**
+    - `total_molecules` — number of valid molecules
+    - `cutoff` — threshold used
+    - `cluster_count` — number of clusters
+    - `clusters` — list of clusters with SMILES
 
-    **Пример запроса:**
+    **Example request:**
     ```json
     POST /rdkit/api/cluster
     {
@@ -2244,7 +2081,7 @@ def cluster_molecules(
     }
     ```
 
-    **Пример ответа:**
+    **Example response:**
     ```json
     {
         "total_molecules": 4,
@@ -2304,46 +2141,47 @@ def cluster_molecules(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@router.get("/stereoisomers", summary="Генерация стереоизомеров")
+@router.get("/stereoisomers", summary=get_text("ep_stereoisomers_desc"))
 def enumerate_stereoisomers(
     smiles: str = Query(..., description=get_text("param_smiles")),
     lang: str = Depends(get_lang),
 ):
     """
-    Перечисляет все возможные стереоизомеры молекулы.
+    Enumerate all possible stereoisomers of a molecule.
 
-    Использует алгоритм EnumerateStereoisomers из RDKit для генерации
-    всех уникальных стереоизомеров с неопределённой стереохимией.
+    Uses the RDKit EnumerateStereoisomers algorithm to generate every unique
+    stereoisomer with undefined stereochemistry.
 
-    **Параметры:**
-    - `smiles` — строка SMILES молекулы
-    - `lang` — язык ответа (ru, en, uk, es)
+    **Parameters:**
+    - `smiles` — molecule SMILES string
+    - `lang` — response language (en, ru, uk, es)
 
-    **Возвращает:**
-    - `stereoisomers` — список всех стереоизомеров в формате SMILES
-    - `count` — количество найденных стереоизомеров
-    - `chiral_centers_count` — количество хиральных центров (N)
-    - `chiral_centers` — список хиральных центров
-    - `max_theoretical_stereoisomers` — максимальное теоретическое количество (2^N)
-    - `formula` — строка с формулой (например, "2^2 = 4")
+    **Returns:**
+    - `stereoisomers` — list of all stereoisomers as SMILES
+    - `count` — number of stereoisomers found
+    - `chiral_centers_count` — number of chiral centres (N)
+    - `chiral_centers` — list of chiral centres
+    - `max_theoretical_stereoisomers` — theoretical maximum (2^N)
+    - `formula` — formula string (for example, "2^2 = 4")
 
-    **Проверка по формуле:**
-    Количество стереоизомеров = 2^N, где N — количество хиральных центров.
-    Например, для молекулы с 2 хиральными центрами: 2^2 = 4 стереоизомера.
+    **Formula check:**
+    The number of stereoisomers is 2^N, where N is the number of chiral
+    centres. For example, a molecule with 2 chiral centres has 2^2 = 4
+    stereoisomers.
 
-    **Пример запроса:**
+    **Example request:**
     ```
-    GET /rdkit/api/stereoisomers?smiles=CC(O)C&lang=ru
+    GET /rdkit/api/stereoisomers?smiles=CC(O)C&lang=en
     ```
 
-    **Пример ответа:**
+    **Example response:**
     ```json
     {
         "smiles": "CC(O)C",
         "stereoisomers": ["C[C@H](O)C", "C[C@@H](O)C"],
         "count": 2,
         "chiral_centers_count": 1,
-        "chiral_centers": [[1, "?")],
+        "chiral_centers": [[1, "?"]],
         "max_theoretical_stereoisomers": 2,
         "formula": "2^1 = 2"
     }
